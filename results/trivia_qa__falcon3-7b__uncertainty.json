@@ -1,0 +1,16 @@
+{
+    "model": "falcon3-7b",
+    "dataset": "trivia_qa",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_09-28-13",
+    "roc_auc": {
+        "var_score": 0.8445,
+        "baseline_var_score": 0.8468,
+        "wasserstein": 0.8473,
+        "baseline_all": 0.8068,
+        "baseline_nll": 0.8048,
+        "pro_score": 0.2174,
+        "std_score": 0.8445,
+        "baseline_std_score": 0.8468
+    }
+}

@@ -1,0 +1,16 @@
+{
+    "model": "llama3.1-8b",
+    "dataset": "gsm8k",
+    "n_samples": 10,
+    "run_datetime": "2025-10-20_20-55-59",
+    "roc_auc": {
+        "var_score": NaN,
+        "baseline_var_score": NaN,
+        "wasserstein": NaN,
+        "baseline_all": NaN,
+        "baseline_nll": NaN,
+        "pro_score": NaN,
+        "std_score": NaN,
+        "baseline_std_score": NaN
+    }
+}

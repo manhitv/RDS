@@ -1,0 +1,16 @@
+{
+    "model": "falcon3-1b",
+    "dataset": "coqa",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_08-50-17",
+    "roc_auc": {
+        "var_score": 0.544,
+        "baseline_var_score": 0.5704,
+        "wasserstein": 0.5574,
+        "baseline_all": 0.3829,
+        "baseline_nll": 0.4092,
+        "pro_score": 0.4581,
+        "std_score": 0.544,
+        "baseline_std_score": 0.5704
+    }
+}

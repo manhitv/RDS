@@ -1,0 +1,16 @@
+{
+    "model": "llama3.1-8b",
+    "dataset": "nq",
+    "n_samples": 10,
+    "run_datetime": "2025-10-20_22-46-08",
+    "roc_auc": {
+        "var_score": 0.7193,
+        "baseline_var_score": 0.7088,
+        "wasserstein": 0.7131,
+        "baseline_all": 0.5677,
+        "baseline_nll": 0.5677,
+        "pro_score": 0.4781,
+        "std_score": 0.7193,
+        "baseline_std_score": 0.7088
+    }
+}

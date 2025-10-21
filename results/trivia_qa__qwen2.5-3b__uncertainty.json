@@ -1,0 +1,14 @@
+{
+    "model": "qwen2.5-3b",
+    "dataset": "trivia_qa",
+    "n_samples": 10,
+    "run_datetime": "2025-10-20_17-44-20",
+    "roc_auc": {
+        "var_score": 0.834,
+        "baseline_var_score": 0.8334,
+        "wasserstein": 0.8306,
+        "baseline_all": 0.5011,
+        "baseline_nll": 0.5011,
+        "pro_score": 0.488
+    }
+}

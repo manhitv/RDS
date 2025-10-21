@@ -1,0 +1,16 @@
+{
+    "model": "gemma3-1b",
+    "dataset": "coqa",
+    "n_samples": 10,
+    "run_datetime": "2025-10-20_20-35-15",
+    "roc_auc": {
+        "var_score": 0.4843,
+        "baseline_var_score": 0.5652,
+        "wasserstein": 0.4992,
+        "baseline_all": 0.5844,
+        "baseline_nll": 0.5742,
+        "pro_score": 0.4934,
+        "std_score": 0.4843,
+        "baseline_std_score": 0.5652
+    }
+}

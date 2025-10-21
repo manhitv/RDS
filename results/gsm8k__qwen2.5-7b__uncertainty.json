@@ -1,0 +1,16 @@
+{
+    "model": "qwen2.5-7b",
+    "dataset": "gsm8k",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_09-31-18",
+    "roc_auc": {
+        "var_score": NaN,
+        "baseline_var_score": NaN,
+        "wasserstein": NaN,
+        "baseline_all": NaN,
+        "baseline_nll": NaN,
+        "pro_score": NaN,
+        "std_score": NaN,
+        "baseline_std_score": NaN
+    }
+}

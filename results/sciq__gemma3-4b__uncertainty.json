@@ -1,0 +1,16 @@
+{
+    "model": "gemma3-4b",
+    "dataset": "sciq",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_09-01-41",
+    "roc_auc": {
+        "var_score": 0.7428,
+        "baseline_var_score": 0.7337,
+        "wasserstein": 0.7478,
+        "baseline_all": 0.6738,
+        "baseline_nll": 0.6738,
+        "pro_score": 0.4665,
+        "std_score": 0.7428,
+        "baseline_std_score": 0.7337
+    }
+}

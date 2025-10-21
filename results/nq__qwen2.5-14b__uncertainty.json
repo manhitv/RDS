@@ -1,0 +1,16 @@
+{
+    "model": "qwen2.5-14b",
+    "dataset": "nq",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_10-29-29",
+    "roc_auc": {
+        "var_score": 0.6577,
+        "baseline_var_score": 0.6961,
+        "wasserstein": 0.6505,
+        "baseline_all": 0.272,
+        "baseline_nll": 0.272,
+        "pro_score": 0.5532,
+        "std_score": 0.6577,
+        "baseline_std_score": 0.6961
+    }
+}

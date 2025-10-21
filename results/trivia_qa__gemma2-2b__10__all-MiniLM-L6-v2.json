@@ -1,0 +1,17 @@
+{
+    "model": "gemma2-2b",
+    "dataset": "trivia_qa",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_16-33-52",
+    "roc_auc": {
+        "baseline_var": 0.8194,
+        "weighted_var": 0.8204,
+        "baseline_l1": 0.8236,
+        "weighted_l1": 0.8241,
+        "baseline_l2": 0.8235,
+        "weighted_l2": 0.8237,
+        "baseline_all": 0.725,
+        "baseline_nll": 0.7227,
+        "pro_score": 0.5033
+    }
+}

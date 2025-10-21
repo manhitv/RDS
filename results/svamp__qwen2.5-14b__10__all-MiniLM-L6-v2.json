@@ -1,0 +1,17 @@
+{
+    "model": "qwen2.5-14b",
+    "dataset": "svamp",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_17-54-16",
+    "roc_auc": {
+        "baseline_var": 0.8255,
+        "weighted_var": 0.819,
+        "baseline_l1": 0.8505,
+        "weighted_l1": 0.8423,
+        "baseline_l2": 0.8485,
+        "weighted_l2": 0.8419,
+        "baseline_all": 0.3751,
+        "baseline_nll": 0.3751,
+        "pro_score": 0.5264
+    }
+}

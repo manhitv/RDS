@@ -1,0 +1,16 @@
+{
+    "model": "falcon3-1b",
+    "dataset": "sciq",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_09-31-07",
+    "roc_auc": {
+        "var_score": 0.7373,
+        "baseline_var_score": 0.7419,
+        "wasserstein": 0.7407,
+        "baseline_all": 0.4784,
+        "baseline_nll": 0.4492,
+        "pro_score": 0.4087,
+        "std_score": 0.7373,
+        "baseline_std_score": 0.7419
+    }
+}

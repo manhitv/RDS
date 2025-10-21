@@ -1,0 +1,14 @@
+{
+    "model": "qwen2.5-3b",
+    "dataset": "coqa",
+    "n_samples": 10,
+    "run_datetime": "2025-10-20_17-09-03",
+    "roc_auc": {
+        "var_score": 0.7213,
+        "baseline_var_score": 0.7147,
+        "wasserstein": 0.7068,
+        "baseline_all": 0.5149,
+        "baseline_nll": 0.514,
+        "pro_score": 0.5016
+    }
+}

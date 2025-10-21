@@ -1,0 +1,16 @@
+{
+    "model": "gemma2-2b",
+    "dataset": "svamp",
+    "n_samples": 10,
+    "run_datetime": "2025-10-21_09-15-29",
+    "roc_auc": {
+        "var_score": 0.8856,
+        "baseline_var_score": 0.8873,
+        "wasserstein": 0.8797,
+        "baseline_all": 0.8137,
+        "baseline_nll": 0.6208,
+        "pro_score": 0.3835,
+        "std_score": 0.8856,
+        "baseline_std_score": 0.8873
+    }
+}

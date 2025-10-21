@@ -1,0 +1,17 @@
+{
+    "model": "gemma3-4b",
+    "dataset": "gsm8k",
+    "n_samples": 8,
+    "run_datetime": "2025-10-22_07-09-39",
+    "roc_auc": {
+        "baseline_var": NaN,
+        "weighted_var": NaN,
+        "baseline_l1": NaN,
+        "weighted_l1": NaN,
+        "baseline_l2": NaN,
+        "weighted_l2": NaN,
+        "baseline_all": NaN,
+        "baseline_nll": NaN,
+        "pro_score": NaN
+    }
+}
