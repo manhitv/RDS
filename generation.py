@@ -289,45 +289,7 @@ def clean_generation(text):
     for s in ['.', '\n', 'Q:', 'A:', 'question:', 'answer:', 'Question:', 'Answer:', 'Questions:', 'questions:', 'QUESTION:', 'ANSWER:', ':']:
         if s in text:
             text = text.split(s)[0].rstrip()
-    return text
-
-
-# --------------------
-# SEMANTIC SIMILARITY
-# --------------------
-def compute_semantic_similarity(sequences, semantic_model, semantic_tokenizer, device):
-    
-    for sample in tqdm.tqdm(sequences):
-        question = sample['question']
-        generations = sample['cleaned_generated_texts']
-        unique_generations = list(set(generations))
-        semantic_set_ids = {ans: i for i, ans in enumerate(unique_generations)}
-
-        # pairwise DeBERTa similarity
-        for i, a1 in enumerate(unique_generations):
-            for j, a2 in enumerate(unique_generations):
-                if j <= i:
-                    continue
-                qa1 = question + " " + a1
-                qa2 = question + " " + a2
-
-                # NLI prediction: 0 = contradiction, 1 = neutral, 2 = entailment
-                encoded = semantic_tokenizer(qa1, qa2, return_tensors='pt', truncation=True, max_length=512).to(device)
-                logits = semantic_model(**encoded).logits
-                pred = torch.argmax(logits, dim=1).item()
-
-                encoded_rev = semantic_tokenizer(qa2, qa1, return_tensors='pt', truncation=True, max_length=512).to(device)
-                logits_rev = semantic_model(**encoded_rev).logits
-                pred_rev = torch.argmax(logits_rev, dim=1).item()
-
-                if not(pred == 0 or pred_rev == 0):
-                    semantic_set_ids[a2] = semantic_set_ids[a1]
-
-        list_of_semantic_set_ids = [semantic_set_ids[x] for x in generations]
-        sample['semantic_set_ids'] = list_of_semantic_set_ids
-
-    return sequences
-
+    return text.strip()
 
 # --------------------
 # MAIN EVALUATION PIPELINE
@@ -351,12 +313,6 @@ def main(args):
     # Run generation
     sequences = generate_sequences(llm=llm, dataset=dataset, rouge=rouge, args=args)
     
-    if args.other_baselines:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        semantic_tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-large-mnli")
-        semantic_model = AutoModelForSequenceClassification.from_pretrained("microsoft/deberta-large-mnli").to(device)
-        sequences = compute_semantic_similarity(sequences=sequences, semantic_model=semantic_model, semantic_tokenizer=semantic_tokenizer, device=device)
-
     # Save
     output_path = f"{config.output_dir}/{args.dataset}__{args.model}__generation.pkl"
     with open(output_path, "wb") as f:
@@ -377,7 +333,6 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='gemma-7b', required=True)
     parser.add_argument('--dataset', type=str, default='coqa', required=True)
     parser.add_argument('--max_new_tokens', type=int, default=32)
-    parser.add_argument('--other_baselines', type=bool, default=False)
     
     args = parser.parse_args()
     set_seed(10)
