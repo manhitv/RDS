@@ -7,11 +7,24 @@ import numpy as np
 import torch
 import tqdm
 import evaluate
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, AutoModelForCausalLM
+from semantic_baselines import *
 import config
 import pandas as pd
 from datasets import load_dataset
 import json
+import sys
+sys.path.append('./..')
+from UGCS.reward_funcs.reward_fn import *
+from semantic_baselines import MODEL_PATH_DICT
+
+def extract_solution(solution_str):
+    string_in_last_boxed = last_boxed_only_string(solution_str)
+    if string_in_last_boxed is not None:
+        pred = remove_boxed(string_in_last_boxed)
+        
+        return pred
+
+    return None
 
 # --------------------
 # Utility setup
@@ -21,45 +34,6 @@ def set_seed(seed_value=10):
     random.seed(seed_value)
     np.random.seed(seed_value)
     torch.manual_seed(seed_value)
-
-
-MODEL_PATH_DICT = {
-    "llama2-13b": "meta-llama/Llama-2-13b-chat-hf",
-    "llama2-70b": "meta-llama/Llama-2-70b-chat-hf",
-    "llama3.1-8b": "meta-llama/Llama-3.1-8B-Instruct",
-    "llama3.2-1b": "meta-llama/Llama-3.2-1B-Instruct",
-    "llama3.2-3b": "meta-llama/Llama-3.2-3B-Instruct",
-    "falcon3-1b": "tiiuae/falcon3-1b-instruct",
-    "falcon3-7b": "tiiuae/falcon3-7b-instruct",
-    "falcon3-10b": "tiiuae/falcon3-10b-instruct",
-    "gemma-7b": "google/gemma-7b-it",
-    "gemma-2b": "google/gemma-2b-it",
-    "gemma2-2b": "google/gemma-2-2b-it",
-    "gemma2-27b": "google/gemma-2-27b",
-    "gemma2-9b": "google/gemma-2-9b-it",
-    "gemma3-1b": "google/gemma-3-1b-it",
-    "gemma3-4b": "google/gemma-3-4b-it",
-    "phi3-7b": "microsoft/Phi-3-small-8k-instruct",
-    "phi3-3b": "microsoft/Phi-3-mini-4k-instruct",
-    "phi3.5-3b": "microsoft/Phi-3.5-mini-instruct",
-    "phi4-3b": "microsoft/Phi-4-mini-instruct",
-    "qwen2.5-0.5b": "Qwen/Qwen2.5-0.5B-Instruct",
-    "qwen2.5-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
-    "qwen2.5-3b": "Qwen/Qwen2.5-3B-Instruct",
-    "qwen2.5-7b": "Qwen/Qwen2.5-7B-Instruct",
-    "qwen2.5-14b": "Qwen/Qwen2.5-14B-Instruct",
-    "qwen2.5-32b": "Qwen/Qwen2.5-32B-Instruct",
-    "qwen2.5-72b": "Qwen/Qwen2.5-72B-Instruct",
-    "qwen3-0.6b": "Qwen/Qwen3-0.6B",
-    "qwen3-1.7b": "Qwen/Qwen3-1.7B",
-    "qwen3-4b": "Qwen/Qwen3-4B",
-    "qwen3-8b": "Qwen/Qwen3-8B",
-    "mistral": "mistralai/Mistral-7B-Instruct-v0.1",
-    "mistral-nemo": "mistralai/Mistral-Nemo-Instruct-2407",
-    "mistral-small": "mistralai/Mistral-Small-Instruct-2409",
-    "mistral-large": "mistralai/Mistral-Large-Instruct-2407"
-}
-
    
 # --------------------
 # PARSE DATASET
@@ -96,6 +70,21 @@ def parse_dataset(args):
         questions = [item['question_concat'] for item in ds]
         answers = [item['Answer'] for item in ds]
     
+    elif args.dataset == 'arith': # 0.5 fraction of data
+        
+        ds = load_dataset(
+            "json", 
+            data_files="https://huggingface.co/datasets/EleutherAI/arithmetic/resolve/main/data/single_digit_three_ops.jsonl"
+            )['train']
+        questions = [item['context'] for item in ds]
+        answers = [item['completion'] for item in ds]
+        
+    elif args.dataset == 'gpqa': # 1 fraction of data
+        
+        ds = load_dataset("Idavidrein/gpqa", "gpqa_diamond")['train']
+        questions = [item['Pre-Revision Question'] for item in ds]
+        answers = [item['Pre-Revision Correct Answer'] for item in ds]
+    
     elif args.dataset == 'trivia_qa':
         val_data = load_dataset("trivia_qa", "rc.nocontext", split="validation")
         train_data = load_dataset("trivia_qa", "rc.nocontext", split="train")
@@ -107,7 +96,18 @@ def parse_dataset(args):
             
         questions = [item['question'] for item in val_data]
         answers = [item['answer']['value'] for item in val_data] 
-        
+    
+    elif args.dataset == 'truthful_qa':
+        val_data = load_dataset("truthfulqa/truthful_qa", "generation")["validation"]
+        data_for_few_shot_prompt = val_data.select(range(0, 10))
+
+        few_shot_prompt = 'This is a bot that correctly answers questions. \n'
+        for sample in data_for_few_shot_prompt:
+            few_shot_prompt += 'Question: ' + sample['question'] + ' Answer: ' + sample['best_answer'] + ' '
+            
+        questions = [item['question'] for item in val_data.select(range(10, len(val_data)))]
+        answers = [item['best_answer'] for item in val_data.select(range(10, len(val_data)))]
+
     elif args.dataset == 'coqa':
         with open(f'{config.data_dir}/coqa.json', 'r') as infile:
             data = json.load(infile)['data']
@@ -137,25 +137,36 @@ def parse_dataset(args):
         raise ValueError(f"Dataset {args.dataset} not supported for parsing.")
 
     # Build few-shot prompt
-    if args.dataset == 'gsm8k':
-        few_shot_prompt = "Please reason step by step, and put your final answer after ####.\n\n"
-    else:
-        few_shot_prompt = "This is a bot that correctly answers questions.\n\n"
     n_few = min(args.few_shot_num, len(questions))
-    for i in range(n_few):
-        if args.dataset in ['sciq', 'nq']:
-            few_shot_prompt += f"Question: {questions[i]}\nAnswer: {answers[i][0]}\n\n"
-        else:
-            few_shot_prompt += f"Question: {questions[i]}\nAnswer: {answers[i]}\n\n"
-    
-    if args.dataset == 'coqa':
+    if args.dataset == 'gsm8k':
+        few_shot_prompt = create_demo_text()
+    elif args.dataset == 'coqa':
         few_shot_prompt = f"This is a bot that correctly answers questions based on the provided context.\n\n{stories[0]}\n\n"
-
+    elif args.dataset in ['trivia_qa', 'truthful_qa']:
+        pass  # already constructed above
+    else:
+        few_shot_prompt = "This is a bot that correctly answers questions.\n"
+        for i in range(n_few):
+            if args.dataset in ['sciq', 'nq']:
+                few_shot_prompt += f"Question: {questions[i]}\nAnswer: {answers[i][0]}\n\n"
+            elif args.dataset == 'arith':
+                few_shot_prompt += f"{questions[i]}\n{answers[i]}\n\n" # Question and Answer is included in context
+            else:
+                few_shot_prompt += f"Question: {questions[i]}\nAnswer: {answers[i]}\n\n"
+    
     # Construct processed dataset
     processed_dataset = []
     if args.dataset == 'coqa':
         for i in range(n_few, len(questions)):
             prompt = few_shot_prompt + questions[i]
+            processed_dataset.append({
+                "question": questions[i],
+                "answer": answers[i],
+                "prompt": prompt
+            })
+    elif args.dataset == 'arith':
+        for i in range(n_few, len(questions)):
+            prompt = few_shot_prompt + f"{questions[i]}\n"
             processed_dataset.append({
                 "question": questions[i],
                 "answer": answers[i],
@@ -223,12 +234,12 @@ def generate_sequences(llm, dataset, rouge, args):
             greedy_text = clean_generation(greedy_out.text)
             
         greedy_logprobs = greedy_out.logprobs
-        
-        if args.dataset in ['gsm8k', 'svamp']: # exact match for math datasets
-            if args.dataset == 'svamp':
-                eval_score = greedy_text.strip() == answer.strip()
-            else:
-                eval_score = extract_hash_answer(greedy_text) == extract_hash_answer(answer)
+
+        if args.dataset in ['svamp', 'arith']: # exact match for math datasets
+            eval_score = greedy_text.strip() == answer.strip()
+        elif args.dataset == 'gsm8k':
+            model_answer = clean_answer(greedy_text)
+            eval_score = is_correct(model_answer=model_answer, answer=answer)
         else:
             eval_score = rouge.compute(predictions=[greedy_text], references=[answer])['rougeL']
 
@@ -314,7 +325,7 @@ def main(args):
     sequences = generate_sequences(llm=llm, dataset=dataset, rouge=rouge, args=args)
     
     # Save
-    output_path = f"{config.output_dir}/{args.dataset}__{args.model}__generation.pkl"
+    output_path = f"{config.output_dir}/{args.dataset}__{args.model}__{args.n_samples}__generation.pkl"
     with open(output_path, "wb") as f:
         pickle.dump(sequences, f)
 
