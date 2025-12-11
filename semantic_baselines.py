@@ -43,6 +43,179 @@ MODEL_PATH_DICT = {
     "mistral-large": "mistralai/Mistral-Large-Instruct-2407"
 }
 
+
+import torch
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from tqdm import tqdm
+import os
+
+
+def confidence_logprob_sum(logprob_sum: torch.Tensor, attention_mask: torch.Tensor, V: int):
+    """
+    Calculate the confidence of the logprob_sum.
+    logprob_sum: torch.Tensor, shape (batch_size, seq_length) or (seq_length)
+    attention_mask: torch.Tensor, shape (batch_size, seq_length) or (seq_length)
+    V: int, the vocab size
+    """
+    logprob_sum = logprob_sum.contiguous()
+    attention_mask = attention_mask.contiguous()
+    V_tensor = torch.tensor(V, dtype=logprob_sum.dtype, device=logprob_sum.device)
+    conf = -1/V * logprob_sum - torch.log(V_tensor)
+    valid_conf = conf * attention_mask
+    batch_confidence_list = (valid_conf.sum(dim=-1) / attention_mask.sum(dim=-1)).tolist()
+    return batch_confidence_list
+
+def get_self_certainty_sample(all_confidences, answers, power=0.3):
+    sorted_indices = sorted(range(len(all_confidences)), key=lambda k: all_confidences[k], reverse=True)
+    votes_per_output = [len(all_confidences) - rank for rank in range(len(all_confidences))] 
+
+    # Power function votes
+    votes_per_output = [vote**power for vote in votes_per_output]
+
+
+    votes_map = {sorted_indices[i]: votes_per_output[i] for i in range(len(sorted_indices))}
+    votes = [0 for _ in range(len(all_confidences))]
+    for i in range(len(all_confidences)):
+        answer_i = answers[i]
+        if answer_i is None:
+            continue
+        find_answer = False
+        for j in range(i):
+            answer_j = answers[j]
+            if answer_j is None:
+                continue
+            if answer_i == answer_j:
+                votes[j] += votes_map[i]
+                find_answer = True
+                break
+            
+        if not find_answer:
+            votes[i] += votes_map[i]
+            
+    all_confidences = [votes[i] for i in range(len(all_confidences))]
+
+    best_confidence = max(all_confidences)
+    best_index = all_confidences.index(best_confidence)
+    return answers[best_index]
+
+@torch.no_grad()
+def compute_self_certainty_scores(
+    model_dir: str,
+    prompts: list[str],
+    generated_texts_list: list[list[str]],  # list of list, mỗi phần tử là 1 list các sample
+    batch_size: int = 4,
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    max_length: int = 2048,
+) -> list[list[float]]:
+    """
+    Tính self-certainty (average log-probability) cho từng generated text,
+    bằng cách cho model "regenerate" lại chính text đó và lấy avg logprob.
+    
+    Returns: list[list[float]] – cùng shape với generated_texts_list
+    """
+    tokenizer = AutoTokenizer.from_pretrained(model_dir, padding_side="right")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_dir,
+        torch_dtype=torch.bfloat16,
+        device_map="auto" if device == "cuda" else None
+    ).to(device)
+    
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model.eval()
+
+    all_confidences = []
+
+    for idx, (prompt, generated_texts) in enumerate(tqdm(zip(prompts, generated_texts_list), total=len(prompts))):
+        # Encode prompt
+        prompt_enc = tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_length,
+            add_special_tokens=False,
+        ).to(device)
+        input_ids = prompt_enc.input_ids[0]
+        input_mask = prompt_enc.attention_mask[0]
+        input_len = input_mask.sum().item()
+
+        confidences = [None] * len(generated_texts)
+
+        # Group generated texts by length to avoid OOM
+        groups = {"small": [], "medium": [], "large": []}
+        indices = []
+        for i, text in enumerate(generated_texts):
+            l = len(text)
+            if l > 6144:
+                groups["large"].append(text)
+            elif l > 3072:
+                groups["medium"].append(text)
+            else:
+                groups["small"].append(text)
+            indices.append(i)
+
+        group_bs = {"small": batch_size, "medium": max(1, batch_size//2), "large": max(1, batch_size//4)}
+
+        for group_name in ["small", "medium", "large"]:
+            texts = groups[group_name]
+            if not texts:
+                continue
+
+            group_indices = [indices[i] for i in range(len(indices)) if generated_texts[indices[i]] in texts]
+            bs = group_bs[group_name]
+
+            # Tokenize outputs
+            out_enc = tokenizer(
+                texts,
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+                return_tensors="pt"
+            ).to(device)
+
+            out_ids = out_enc.input_ids
+            out_mask = out_enc.attention_mask
+
+            # Repeat prompt for batch
+            full_ids = torch.cat([
+                input_ids.unsqueeze(0).repeat(len(texts), 1),
+                out_ids
+            ], dim=1).long()
+            full_mask = torch.cat([
+                input_mask.unsqueeze(0).repeat(len(texts), 1),
+                out_mask
+            ], dim=1).long()
+
+            group_confs = []
+            for i in range(0, len(texts), bs):
+                j = i + bs
+                batch_ids = full_ids[i:j]
+                batch_mask = full_mask[i:j]
+                batch_out_ids = out_ids[i:j]
+
+                logits = model(batch_ids, attention_mask=batch_mask).logits
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    # Chỉ lấy phần output (từ token đầu tiên của output)
+                    batch_logprob_sum = logits[:, input_len:, :]  # -1 vì label bắt đầu từ token thứ input_len
+                    batch_logprob_sum = F.log_softmax(batch_logprob_sum, dim=-1)
+                    batch_logprob_sum = batch_logprob_sum.sum(dim=-1).to(device).to(torch.float32)
+                
+                # Use the output attention mask from the tokenized group (for this batch).
+                batch_output_attention_mask = out_mask[i:j]
+                batch_confidence_list = confidence_logprob_sum(batch_logprob_sum, batch_output_attention_mask, model.config.vocab_size)
+                group_confs.extend(batch_confidence_list)
+
+            # Gán lại đúng vị trí
+            for conf, orig_idx in zip(group_confs, group_indices):
+                confidences[orig_idx] = float(conf)
+
+        all_confidences.append(confidences)
+
+    return all_confidences
+
+
 def clean_answer(model_pred):
     model_pred = model_pred.lower()
     preds = model_pred.split(ANSWER_TRIGGER.lower())

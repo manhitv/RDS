@@ -80,14 +80,17 @@ def load_model_from_path(model_name, device):
 
     return model, tokenizer
 
-
-#### -------------------- 20251105
+import torch.nn.functional as F
+#### -------------------- 20251205 --------------------
 def main(args, semantic_model, semantic_tokenizer):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     embed_model = SentenceTransformer(args.embed_model).to(device)
 
     # --- Load generations ---
-    gen_path = f"{config.output_dir}/{args.dataset}__{args.model}__{args.n_samples}__generation.pkl"
+    if args.n_samples == 10:
+        gen_path = f"{config.output_dir}/{args.dataset}__{args.model}__generation.pkl"
+    else:
+        gen_path = f"{config.output_dir}/{args.dataset}__{args.model}__{args.n_samples}__generation.pkl"
     with open(gen_path, "rb") as infile:
         generations = pickle.load(infile)
 
@@ -111,6 +114,7 @@ def main(args, semantic_model, semantic_tokenizer):
 
         # --- Embeddings ---
         embeddings = embed_model.encode(cleaned_texts, convert_to_tensor=True, device=device)
+        embeddings = F.normalize(embeddings, p=2, dim=1)
         
         # --- Base version ---
         mean_embedding = torch.mean(embeddings, dim=0)
@@ -170,7 +174,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_samples', type=int, default=10)
     parser.add_argument('--eigen_baselines', type=bool, default=False, help='Whether to compute eigen baselines')
     parser.add_argument('--eigen_embed_only', type=bool, default=False, help='Whether to compute only eigen embedding baselines')
-    parser.add_argument('--version', type=str, default='20251106', help='Version identifier for the run')
+    parser.add_argument('--version', type=str, default='20251205', help='Version identifier for the run')
     parser.add_argument('--semantic_baselines', type=bool, default=True, help='Whether to compute semantic baselines')
     args = parser.parse_args()
     

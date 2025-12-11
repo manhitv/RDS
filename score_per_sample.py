@@ -102,7 +102,6 @@ def load_model_from_path(model_name, device):
 
     return model, tokenizer
 
-from semantic_baselines import compute_clusters
 from generation import clean_generation, clean_answer, is_correct
 
 def evaluation_sample(dataset, text, answer, rouge):
@@ -128,6 +127,7 @@ def evaluation_sample(dataset, text, answer, rouge):
     return acc
 
 from collections import Counter
+from semantic_baselines import compute_self_certainty_scores, get_self_certainty_sample
 
 def main(args):
     experiment_id = os.getpid()
@@ -181,12 +181,46 @@ def main(args):
 
         freq = Counter(cleaned_texts)
         majority_sample = freq.most_common(1)[0][0]
+        
+        if args.self_certainty:
+            sc_cache_path = f"{config.output_dir}/{args.dataset}__{args.model}__self_certainty.pkl"
+            os.makedirs(os.path.dirname(sc_cache_path), exist_ok=True)
+
+            if os.path.exists(sc_cache_path):
+                # print("Loading cached self-certainty scores...")
+                with open(sc_cache_path, "rb") as f:
+                    all_self_certainty = pickle.load(f)
+            else:
+                prompts = [gen["prompt"] for gen in generations]
+                generated_texts_list = [gen["cleaned_generated_texts"] for gen in generations]
+                
+                all_self_certainty = compute_self_certainty_scores(
+                    model_dir=MODEL_PATH_DICT[args.model],  # hoặc args.self_certainty_model nếu bạn muốn dùng model khác
+                    prompts=prompts,
+                    generated_texts_list=generated_texts_list,
+                    batch_size=4,
+                    device=device
+                )
+                
+                with open(sc_cache_path, "wb") as f:
+                    pickle.dump(all_self_certainty, f)
+                print(f"Saved self-certainty scores to {sc_cache_path}")
+                
+            gen["samples_ce"] = all_self_certainty[i]
+        
+        # --- Self-certainty sample ---
+        if "samples_ce" in gen:
+            sc_scores = np.array(gen["samples_ce"])
+            self_certainty_sample = get_self_certainty_sample(sc_scores, cleaned_texts)
+        else:
+            self_certainty_sample = None
 
         # --- Evaluation ---
-        for method, sample in zip(
-            ["nll", "avg_nll", "ot", "weighted_ot", "penal_weighted_ot", "majority"],
-            [nll_sample, avg_nll_sample, ot_sample, weighted_ot_sample, penal_weighted_ot_sample, majority_sample]
-        ):
+        methods = ['nll', 'avg_nll', 'ot', 'weighted_ot', 'penal_weighted_ot', 'majority'] if self_certainty_sample is None else \
+                  ['nll', 'avg_nll', 'ot', 'weighted_ot', 'penal_weighted_ot', 'majority', 'self_certainty']
+        samples = [nll_sample, avg_nll_sample, ot_sample, weighted_ot_sample, penal_weighted_ot_sample, majority_sample] if self_certainty_sample is None else \
+                  [nll_sample, avg_nll_sample, ot_sample, weighted_ot_sample, penal_weighted_ot_sample, majority_sample, self_certainty_sample]
+        for method, sample in zip(methods, samples):
             acc = evaluation_sample(
                 dataset=args.dataset,
                 text=sample,
@@ -208,7 +242,10 @@ def main(args):
     for method, values in accuracy.items():
         final_acc = np.mean(values)
         results[method] = final_acc
-        print(f"{method:55s} → ACC: {final_acc:.4f}")
+        if method == 'self_certainty':
+            print(f"{method:55s} → ACC: {final_acc:.4f} ⭐")
+        
+        # print(f"{method:55s} → ACC: {final_acc:.4f}")
 
     # --- Save results ---
     json_path = f"{config.result_dir}/{args.dataset}__{args.model}__sample__{args.version}.json"
@@ -224,7 +261,8 @@ if __name__ == "__main__":
     parser.add_argument('--embed_model', type=str, default='all-MiniLM-L6-v2')
     parser.add_argument('--dataset', type=str, required=True)
     parser.add_argument('--n_samples', type=int, default=10)
-    parser.add_argument('--version', type=str, default='20251129', help='Version identifier for the run')
+    parser.add_argument('--version', type=str, default='20251206', help='Version identifier for the run')
+    parser.add_argument('--self_certainty', type=bool, default=False)
     args = parser.parse_args()
 
     main(args)

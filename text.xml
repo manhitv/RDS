@@ -1,0 +1,276 @@
+<mxfile host="app.diagrams.net" modified="2024-01-01T00:00:00.000Z" agent="Claude" version="22.0.0" type="device">
+  <diagram name="RDS-vs-EigenEmbed" id="rds-comparison">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        
+        <!-- Title -->
+        <mxCell id="title" value="RDS vs EigenEmbed: Three Cases" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="500" y="20" width="400" height="40" as="geometry"/>
+        </mxCell>
+        
+        <!-- Case 1: Low Uncertainty (Collapsed) -->
+        <mxCell id="case1-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#dee2e6;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="400" height="380" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="case1-title" value="Case 1: Low Uncertainty (Collapsed)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="90" y="95" width="300" height="30" as="geometry"/>
+        </mxCell>
+        
+        <!-- Coordinate axes case 1 -->
+        <mxCell id="case1-axis-y" value="" style="endArrow=classic;html=1;strokeColor=#adb5bd;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="240" y="380" as="sourcePoint"/>
+            <mxPoint x="240" y="160" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <mxCell id="case1-axis-x" value="" style="endArrow=classic;html=1;strokeColor=#adb5bd;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="100" y="280" as="sourcePoint"/>
+            <mxPoint x="380" y="280" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Unit circle case 1 -->
+        <mxCell id="case1-circle" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=none;strokeColor=#ced4da;strokeWidth=2;dashed=1;dashPattern=5 5;" vertex="1" parent="1">
+          <mxGeometry x="140" y="180" width="200" height="200" as="geometry"/>
+        </mxCell>
+        
+        <!-- Centroid case 1 (very close to cluster) -->
+        <mxCell id="case1-centroid" value="x̄" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#fd7e14;strokeColor=#e8590c;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="235" y="275" width="10" height="10" as="geometry"/>
+        </mxCell>
+        
+        <!-- Clustered points case 1 (all very close together) -->
+        <mxCell id="case1-p1" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="232" y="270" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p2" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="238" y="272" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p3" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="235" y="278" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p4" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="241" y="276" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p5" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="229" y="276" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p6" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="236" y="268" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p7" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="242" y="280" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p8" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="230" y="282" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p9" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="238" y="281" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case1-p10" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="233" y="274" width="8" height="8" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="case1-metric" value="RDS ≈ 0, EigenEmbed ≈ 0&lt;br&gt;Gap: MINIMAL (both near zero)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d3f9d8;strokeColor=#2f9e44;strokeWidth=2;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="70" y="410" width="340" height="40" as="geometry"/>
+        </mxCell>
+        
+        <!-- Case 2: Isotropic -->
+        <mxCell id="case2-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#dee2e6;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="480" y="80" width="400" height="380" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="case2-title" value="Case 2: Isotropic (Uniform Spread)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="530" y="95" width="300" height="30" as="geometry"/>
+        </mxCell>
+        
+        <!-- Coordinate axes case 2 -->
+        <mxCell id="case2-axis-y" value="" style="endArrow=classic;html=1;strokeColor=#adb5bd;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="680" y="380" as="sourcePoint"/>
+            <mxPoint x="680" y="160" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <mxCell id="case2-axis-x" value="" style="endArrow=classic;html=1;strokeColor=#adb5bd;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="540" y="280" as="sourcePoint"/>
+            <mxPoint x="820" y="280" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Unit circle case 2 -->
+        <mxCell id="case2-circle" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=none;strokeColor=#ced4da;strokeWidth=2;dashed=1;dashPattern=5 5;" vertex="1" parent="1">
+          <mxGeometry x="580" y="180" width="200" height="200" as="geometry"/>
+        </mxCell>
+        
+        <!-- Centroid case 2 -->
+        <mxCell id="case2-centroid" value="x̄" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#fd7e14;strokeColor=#e8590c;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="675" y="275" width="10" height="10" as="geometry"/>
+        </mxCell>
+        
+        <!-- Uniformly spread points case 2 -->
+        <mxCell id="case2-p1" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="676" y="186" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p2" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="732" y="210" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p3" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="762" y="260" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p4" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="754" y="318" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p5" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="710" y="358" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p6" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="650" y="366" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p7" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="600" y="338" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p8" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="586" y="278" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p9" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="606" y="218" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case2-p10" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1971c2;strokeColor=#1864ab;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="650" y="196" width="8" height="8" as="geometry"/>
+        </mxCell>
+        
+        <!-- Distance lines case 2 -->
+        <mxCell id="case2-dist1" value="" style="endArrow=none;dashed=1;html=1;strokeColor=#fa5252;strokeWidth=1.5;dashPattern=3 3;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="680" y="280" as="sourcePoint"/>
+            <mxPoint x="680" y="190" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <mxCell id="case2-metric" value="RDS ≈ √N, EigenEmbed ≈ 0.8-0.9&lt;br&gt;Gap: MODERATE" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e7f5ff;strokeColor=#339af0;strokeWidth=2;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="510" y="410" width="340" height="40" as="geometry"/>
+        </mxCell>
+        
+        <!-- Case 3: Bimodal -->
+        <mxCell id="case3-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#dee2e6;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="920" y="80" width="400" height="380" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="case3-title" value="Case 3: Bimodal (Antipodal)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="970" y="95" width="300" height="30" as="geometry"/>
+        </mxCell>
+        
+        <!-- Coordinate axes case 3 -->
+        <mxCell id="case3-axis-y" value="" style="endArrow=classic;html=1;strokeColor=#adb5bd;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1120" y="380" as="sourcePoint"/>
+            <mxPoint x="1120" y="160" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <mxCell id="case3-axis-x" value="" style="endArrow=classic;html=1;strokeColor=#adb5bd;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="980" y="280" as="sourcePoint"/>
+            <mxPoint x="1260" y="280" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- Unit circle case 3 -->
+        <mxCell id="case3-circle" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=none;strokeColor=#ced4da;strokeWidth=2;dashed=1;dashPattern=5 5;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="180" width="200" height="200" as="geometry"/>
+        </mxCell>
+        
+        <!-- Centroid case 3 (at origin) -->
+        <mxCell id="case3-centroid" value="x̄≈0" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#fa5252;strokeColor=#e03131;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1115" y="275" width="10" height="10" as="geometry"/>
+        </mxCell>
+        
+        <!-- Cluster 1: Top-right (green) -->
+        <mxCell id="case3-c1p1" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2f9e44;strokeColor=#2b8a3e;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="210" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case3-c1p2" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2f9e44;strokeColor=#2b8a3e;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1198" y="218" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case3-c1p3" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2f9e44;strokeColor=#2b8a3e;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1186" y="222" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case3-c1p4" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2f9e44;strokeColor=#2b8a3e;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1194" y="206" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case3-c1p5" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#2f9e44;strokeColor=#2b8a3e;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1182" y="214" width="8" height="8" as="geometry"/>
+        </mxCell>
+        
+        <!-- Cluster 2: Bottom-left (purple) -->
+        <mxCell id="case3-c2p1" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#7950f2;strokeColor=#6741d9;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="350" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case3-c2p2" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#7950f2;strokeColor=#6741d9;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1042" y="342" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case3-c2p3" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#7950f2;strokeColor=#6741d9;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1054" y="338" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case3-c2p4" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#7950f2;strokeColor=#6741d9;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1046" y="354" width="8" height="8" as="geometry"/>
+        </mxCell>
+        <mxCell id="case3-c2p5" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#7950f2;strokeColor=#6741d9;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="1058" y="346" width="8" height="8" as="geometry"/>
+        </mxCell>
+        
+        <!-- Distance lines case 3 -->
+        <mxCell id="case3-dist1" value="" style="endArrow=none;dashed=1;html=1;strokeColor=#fa5252;strokeWidth=2;dashPattern=3 3;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1120" y="280" as="sourcePoint"/>
+            <mxPoint x="1194" y="214" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <mxCell id="case3-dist2" value="" style="endArrow=none;dashed=1;html=1;strokeColor=#fa5252;strokeWidth=2;dashPattern=3 3;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1120" y="280" as="sourcePoint"/>
+            <mxPoint x="1050" y="350" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        
+        <mxCell id="case3-metric" value="RDS ≥ √N, EigenEmbed ≈ 1&lt;br&gt;Gap: MAXIMUM (x̄→0)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3bf;strokeColor=#f59f00;strokeWidth=2;fontSize=11;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="950" y="410" width="340" height="40" as="geometry"/>
+        </mxCell>
+        
+        <!-- Bottom Summary -->
+        <mxCell id="summary-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9ecef;strokeColor=#495057;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="500" width="1280" height="120" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="summary-title" value="Key Insights from Paper" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=16;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="540" y="510" width="320" height="30" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="insight1" value="1. Collapsed (Case 1): All embeddings identical → RDS ≈ EigenEmbed ≈ 0 (low uncertainty)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="545" width="600" height="20" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="insight2" value="2. Isotropic (Case 2): Uniform spread → RDS and EigenEmbed both moderate, gap moderate" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="570" width="600" height="20" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="insight3" value="3. Bimodal/Antipodal (Case 3): x̄→0, cosine similarity &lt; 0 → RDS ≫ EigenEmbed (MAXIMUM gap)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="595" width="600" height="20" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="insight4" value="→ RDS is MORE SENSITIVE to high-uncertainty regimes with semantic diversity!" style="text;html=1;strokeColor=#e03131;fillColor=#ffe3e3;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=13;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="720" y="555" width="560" height="40" as="geometry"/>
+        </mxCell>
+        
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
