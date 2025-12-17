@@ -1,11 +1,20 @@
-import numpy as np
 import torch
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from tqdm import tqdm
+import numpy as np
 import re
+import random
+import os
+import config
 
 ANSWER_TRIGGER = 'The answer is'
 ANS_RE = re.compile(r"#### (\-?[0-9\.\,]+)")
 INVALID_ANS = "[invalid]"
 
+### --------------------------------
+### Model & preprocessing utils
+### --------------------------------
 MODEL_PATH_DICT = {
     "llama2-13b": "meta-llama/Llama-2-13b-chat-hf",
     "llama2-70b": "meta-llama/Llama-2-70b-chat-hf",
@@ -44,13 +53,93 @@ MODEL_PATH_DICT = {
 }
 
 
-import torch
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from tqdm import tqdm
-import os
+def set_seed(seed_value=10):
+    os.environ['PYTHONHASHSEED'] = str(seed_value)
+    random.seed(seed_value)
+    np.random.seed(seed_value)
+    torch.manual_seed(seed_value)
 
 
+def flatten_logprobs(logprobs):
+    """
+    Flattens nested list[dict[token_id -> Logprob]] into a list of floats.
+    """
+    flat = []
+    if not logprobs:
+        return flat
+    if isinstance(logprobs, list):
+        for step in logprobs:
+            if isinstance(step, dict):
+                flat.extend([v.logprob for v in step.values()])
+    elif isinstance(logprobs, dict):
+        flat.extend([v.logprob for v in logprobs.values()])
+    return flat
+
+
+def clean_generation(text):
+    for s in ['.', '\n', 'Q:', 'A:', 'question:', 'answer:', 'Question:', 'Answer:', 'Questions:', 'questions:', 'QUESTION:', 'ANSWER:', ':']:
+        if s in text:
+            text = text.split(s)[0].rstrip()
+    return text.strip()
+
+
+def load_model_from_path(model_name, device):
+    if model_name not in MODEL_PATH_DICT:
+        raise ValueError(f"Model {model_name} not supported")
+    model_path = MODEL_PATH_DICT[model_name].lower()
+
+    # --- tokenizer ---
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path,
+        padding_side="left",
+        trust_remote_code=True,
+        use_fast=False if "falcon3" in model_path else True,
+    )
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    # --- model ---
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.float16,
+        device_map=device,
+        trust_remote_code=True,
+        cache_dir=config.hf_cache_dir
+    )
+
+    return model, tokenizer 
+
+### ---------------------------------
+### Metric computation utils
+### ---------------------------------
+def compute_weighted_mean(embeddings, weights):
+    """Compute weighted mean of embeddings."""
+    weights = torch.tensor(weights, dtype=torch.float32).unsqueeze(1).to(embeddings.device)
+    return (weights * embeddings).sum(dim=0)
+
+
+def compute_metrics(embeddings, mean, weights, p=1):
+    """
+    Compute various distance-based metrics between embeddings and a mean embedding.
+    
+    Args:
+        embeddings (torch.Tensor): shape (N, D)
+        mean (torch.Tensor): shape (D,)
+        weights (array-like): length N, non-negative
+        p (float): order for Lp or Wasserstein metric
+        method (str): one of {"lp", "wasserstein", "cosine", "mahalanobis"}
+        cov_inv (torch.Tensor, optional): inverse covariance for Mahalanobis distance
+    """
+    device = embeddings.device
+    weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
+    weights_tensor = weights_tensor / weights_tensor.sum()  # normalize weights
+    diffs = embeddings - mean
+
+    norms = torch.norm(diffs, p=p, dim=1)
+    weighted = (weights_tensor * norms).sum()
+    return weighted.item()
+
+### --------------------------------- Self-certainty ------------------------------------------
 def confidence_logprob_sum(logprob_sum: torch.Tensor, attention_mask: torch.Tensor, V: int):
     """
     Calculate the confidence of the logprob_sum.
@@ -99,21 +188,17 @@ def get_self_certainty_sample(all_confidences, answers, power=0.3):
     best_index = all_confidences.index(best_confidence)
     return answers[best_index]
 
+
 @torch.no_grad()
 def compute_self_certainty_scores(
     model_dir: str,
     prompts: list[str],
-    generated_texts_list: list[list[str]],  # list of list, mỗi phần tử là 1 list các sample
+    generated_texts_list: list[list[str]], 
     batch_size: int = 4,
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     max_length: int = 2048,
 ) -> list[list[float]]:
-    """
-    Tính self-certainty (average log-probability) cho từng generated text,
-    bằng cách cho model "regenerate" lại chính text đó và lấy avg logprob.
-    
-    Returns: list[list[float]] – cùng shape với generated_texts_list
-    """
+    # Reference from: https://github.com/backprop07/Self-Certainty/blob/main/src/confidence_list.py
     tokenizer = AutoTokenizer.from_pretrained(model_dir, padding_side="right")
     model = AutoModelForCausalLM.from_pretrained(
         model_dir,
@@ -193,12 +278,10 @@ def compute_self_certainty_scores(
                 j = i + bs
                 batch_ids = full_ids[i:j]
                 batch_mask = full_mask[i:j]
-                batch_out_ids = out_ids[i:j]
 
                 logits = model(batch_ids, attention_mask=batch_mask).logits
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    # Chỉ lấy phần output (từ token đầu tiên của output)
-                    batch_logprob_sum = logits[:, input_len:, :]  # -1 vì label bắt đầu từ token thứ input_len
+                    batch_logprob_sum = logits[:, input_len:, :] 
                     batch_logprob_sum = F.log_softmax(batch_logprob_sum, dim=-1)
                     batch_logprob_sum = batch_logprob_sum.sum(dim=-1).to(device).to(torch.float32)
                 
@@ -207,7 +290,6 @@ def compute_self_certainty_scores(
                 batch_confidence_list = confidence_logprob_sum(batch_logprob_sum, batch_output_attention_mask, model.config.vocab_size)
                 group_confs.extend(batch_confidence_list)
 
-            # Gán lại đúng vị trí
             for conf, orig_idx in zip(group_confs, group_indices):
                 confidences[orig_idx] = float(conf)
 
@@ -215,7 +297,7 @@ def compute_self_certainty_scores(
 
     return all_confidences
 
-
+### --------------------------------- GSM8K ------------------------------------------
 def clean_answer(model_pred):
     model_pred = model_pred.lower()
     preds = model_pred.split(ANSWER_TRIGGER.lower())
@@ -346,12 +428,7 @@ def create_demo_text(n_shot=8, cot_flag=True):
     return demo_text
 
 
-def compute_wasserstein(norms, weights, p=2):
-    """Compute generalized p-Wasserstein distance."""
-    weights_tensor = torch.tensor(weights, dtype=torch.float32).to(norms.device if isinstance(norms, torch.Tensor) else 'cpu')
-    return ((weights_tensor * (norms ** p)).sum()) ** (1.0 / p)
-
-
+### --------------------------------- EigenEmbed ------------------------------------------
 def compute_eigen_embed(sentence_embeddings, alpha=1e-3):
     embeddings = (
         sentence_embeddings.cpu().numpy() 
@@ -375,365 +452,7 @@ def compute_eigen_embed(sentence_embeddings, alpha=1e-3):
 
     return eigen_score
 
-def eigen_score(prompt, generations, tokenizer=None, model=None, sentence_embeddings=None, mode="internal", variance_dim='feature'):
-    """
-    Compute EigenScore for a list of generated outputs, supporting both internal LLM hidden states
-    and third-party embeddings.
-    """
-    alpha = 1e-3
-    embeddings = []
-    
-    if mode == "internal":
-        if tokenizer is None or model is None:
-            raise ValueError("tokenizer and model are required for mode='internal'")
-        model.eval()
-        for output in generations:
-            # Encode
-            full_text = prompt + output
-            inputs = tokenizer(full_text, return_tensors="pt", padding=True, truncation=True).to(model.device)
-        
-            with torch.no_grad():
-                outputs = model(**inputs, output_hidden_states=True)
-                hidden_states = outputs.hidden_states  # list[layer][batch, seq, hidden]
-            
-            # Pick middle layer by default
-            layer_idx = len(hidden_states) // 2
 
-            # Use token before the last one (num_tokens - 2)
-            num_tokens = inputs["input_ids"].shape[1]
-            token_idx = max(num_tokens - 2, 0) # based on author's implementation
-            
-            emb = hidden_states[layer_idx][:, token_idx, :].squeeze().cpu().numpy()
-            embeddings.append(emb)
-    
-    elif mode == "third_party":
-        if sentence_embeddings is None:
-            raise ValueError("embeddings are required for mode='third_party'")
-        embeddings = sentence_embeddings.cpu().numpy() if isinstance(sentence_embeddings, torch.Tensor) else sentence_embeddings
-    
-    # Compute covariance matrix
-    embeddings = np.array(embeddings)
-    cov = np.cov(embeddings.T) + alpha * np.eye(embeddings.shape[1])
-
-    # SVD and eigen score
-    u, s, vT = np.linalg.svd(cov)
-    eigen_score = np.mean(np.log10(s))
-    
-    return eigen_score
-
-
-def eigen_score_refactor(prompt, tokenizer=None, model=None, sentence_embeddings=None, mode="internal", 
-                         n_samples=10, max_new_tokens=32, top_p=0.99, top_k=10, temperature=1.0, variance_dim='feature'):
-    """
-    Compute EigenScore for a list of generated outputs, supporting both internal LLM hidden states
-    and third-party embeddings.
-    """
-    alpha = 1e-3
-    embeddings = []
-    
-    if mode == "internal":
-        if tokenizer is None or model is None:
-            raise ValueError("tokenizer and model are required for mode='internal'")
-        model.eval()
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        # num_tokens = inputs["input_ids"].shape[1]
-        # token_idx = max(num_tokens - 2, 0) # based on author's implementation
-
-        # Generate with hidden states
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                num_beams=1,
-                num_return_sequences=n_samples,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=top_p,
-                top_k=top_k,
-                temperature=temperature,
-                output_hidden_states=True,
-                return_dict_in_generate=True
-            )
-            
-        # hidden_states: list[num_steps][num_layers][batch, seq_len, hidden_dim]
-        hidden_states_all = outputs.hidden_states
-        layer_idx = len(hidden_states_all[0]) // 2
-        
-        # step_states[layer_idx]: shape [batch, 1, hidden_dim]
-        for hidden_states in hidden_states_all:
-            emb = hidden_states[layer_idx][:, -1, :].squeeze().cpu().numpy()
-            
-            if emb.ndim == 1:
-                emb = emb[None, :]  # shape [1, hidden]  
-            embeddings.append(emb)
-        
-        embeddings = np.concatenate(embeddings, axis=0)  # shape [n_samples, hidden_dim]
-    
-    elif mode == "third_party":
-        if sentence_embeddings is None:
-            raise ValueError("embeddings are required for mode='third_party'")
-        embeddings = sentence_embeddings.cpu().numpy() if isinstance(sentence_embeddings, torch.Tensor) else sentence_embeddings
-    
-    # Compute covariance matrix
-    embeddings = np.array(embeddings)
-    cov = np.cov(embeddings.T) + alpha * np.eye(embeddings.shape[1])
-
-    # SVD and eigen score
-    u, s, vT = np.linalg.svd(cov)
-    eigen_score = np.mean(np.log10(s))
-    
-    return (-1) * eigen_score
-
-
-# ----------------
-### EigenScore (exactly like original author implementation)
-# ----------------
-def getEigenIndicator_v0(hidden_states, num_tokens): 
-    alpha = 1e-3
-    selected_layer = int(len(hidden_states[0])/2)
-    # selected_layer = -1
-    if len(hidden_states) < 2:
-        return 0
-    last_embeddings = torch.zeros(hidden_states[1][-1].shape[0], hidden_states[1][-1].shape[2]).to("cuda")
-    for ind in range(hidden_states[1][-1].shape[0]):
-        last_embeddings[ind,:] = hidden_states[num_tokens[ind]-2][selected_layer][ind,0,:]
-    CovMatrix = torch.cov(last_embeddings).cpu().numpy().astype(float)
-    u, s, vT = np.linalg.svd(CovMatrix+alpha*np.eye(CovMatrix.shape[0]))
-    eigenIndicator = np.mean(np.log10(s))
-    return eigenIndicator
-
-
-def get_num_tokens(generation):  # generation: num_seq x max(num_tokens)
-    num_tokens = []
-    for ids in generation:
-        count = 0
-        for id in ids:
-            if id>2:
-                count+=1
-        num_tokens.append(count+1)
-    return num_tokens
-
-def eigen_score_origin_v2(
-    prompt=None,
-    tokenizer=None,
-    model=None,
-    sentence_embeddings=None,
-    mode="internal",
-    n_samples=10,
-    max_new_tokens=64,
-    top_p=0.99,
-    top_k=10,
-    temperature=1.0
-):
-    """
-    Compute EigenScore exactly like the original author implementation.
-    
-    - mode="internal": Use LLM hidden states (at token position = total_tokens - 2)
-    - mode="third_party": Use precomputed sentence embeddings (N x D)
-    
-    Returns: -mean(log10(singular_values))  (higher = more diverse = more uncertain)
-    """
-    alpha = 1e-3
-    embeddings = []
-
-    # ================================
-    # 1. INTERNAL MODE: Generate + extract hidden states
-    # ================================
-    if mode == "internal":
-        if tokenizer is None or model is None:
-            raise ValueError("tokenizer and model are required for mode='internal'")
-        if prompt is None:
-            raise ValueError("prompt is required for mode='internal'")
-
-        model.eval()
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                num_beams=1,
-                num_return_sequences=n_samples,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=top_p,
-                top_k=top_k,
-                temperature=temperature,
-                output_hidden_states=True,
-                return_dict_in_generate=True,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id
-            )
-
-        # outputs.sequences: [n_samples, total_len]
-        # outputs.hidden_states: list[step] of tuple[layer](batch, seq, dim)
-        sequences = outputs.sequences
-        hidden_states_all = outputs.hidden_states  # len = max_new_tokens
-        input_length = inputs['input_ids'].shape[1]
-        generation = outputs.sequences[:, input_length:].cpu()
-        num_tokens = get_num_tokens(generation)
-
-        eigen_score = getEigenIndicator_v0(hidden_states_all, num_tokens)
-        
-        return eigen_score
-
-    # ================================
-    # 2. THIRD-PARTY EMBEDDING MODE
-    # ================================
-    elif mode == "third_party":
-        if sentence_embeddings is None:
-            raise ValueError("sentence_embeddings required for mode='third_party'")
-        embeddings = (
-            sentence_embeddings.cpu().numpy() 
-            if isinstance(sentence_embeddings, torch.Tensor) 
-            else np.array(sentence_embeddings)
-        )
-        if embeddings.ndim != 2:
-            raise ValueError(f"Expected (N, D) tensor, got {embeddings.shape}")
-        
-        embeddings = np.array(embeddings)  # Shape: (N, D)
-        N = embeddings.shape[0]
-        
-        if N < 2:
-            return 0.0  # or raise warning
-
-        # CRUCIAL: Use sample covariance (N x N), NOT feature covariance
-        cov = np.cov(embeddings) # Shape: (N, N)
-        cov = cov + alpha * np.eye(N)  # Regularize
-
-        # SVD
-        u, s, vT = np.linalg.svd(cov)  # singular values
-        eigen_score = np.mean(np.log10(s))
-        
-        return eigen_score  # Negative → higher diversity = higher uncertainty
-
-    else:
-        raise ValueError("mode must be 'internal' or 'third_party'")
-
-
-def eigen_score_origin(
-    prompt=None,
-    tokenizer=None,
-    model=None,
-    sentence_embeddings=None,
-    mode="internal",
-    n_samples=10,
-    max_new_tokens=64,
-    top_p=0.99,
-    top_k=10,
-    temperature=1.0
-):
-    """
-    Compute EigenScore exactly like the original author implementation.
-    
-    - mode="internal": Use LLM hidden states (at token position = total_tokens - 2)
-    - mode="third_party": Use precomputed sentence embeddings (N x D)
-    
-    Returns: -mean(log10(singular_values))  (higher = more diverse = more uncertain)
-    """
-    alpha = 1e-3
-    embeddings = []
-
-    # ================================
-    # 1. INTERNAL MODE: Generate + extract hidden states
-    # ================================
-    if mode == "internal":
-        if tokenizer is None or model is None:
-            raise ValueError("tokenizer and model are required for mode='internal'")
-        if prompt is None:
-            raise ValueError("prompt is required for mode='internal'")
-
-        model.eval()
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                num_beams=1,
-                num_return_sequences=n_samples,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_p=top_p,
-                top_k=top_k,
-                temperature=temperature,
-                output_hidden_states=True,
-                return_dict_in_generate=True,
-                pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id
-            )
-
-        # outputs.sequences: [n_samples, total_len]
-        # outputs.hidden_states: list[step] of tuple[layer](batch, seq, dim)
-        sequences = outputs.sequences
-        hidden_states_all = outputs.hidden_states  # len = max_new_tokens
-
-        # Middle layer
-        layer_idx = len(hidden_states_all[0]) // 2  # hidden_states_all[0] = tuple of layers
-
-        for i in range(n_samples):
-            seq = sequences[i]
-            seq_len = seq.shape[0]
-            prompt_len = inputs['input_ids'].shape[1]
-
-            # Nếu generation rỗng hoặc quá ngắn
-            if seq_len <= prompt_len:
-                # Dùng hidden state cuối cùng của prompt
-                emb = hidden_states_all[0][layer_idx][i, -1, :].cpu().numpy()
-                embeddings.append(emb)
-                continue
-
-            # Token trước EOS
-            token_idx = seq_len - 2
-            if token_idx < 0:
-                token_idx = 0
-
-            # Bước generate
-            step_idx = token_idx - prompt_len
-            step_idx = max(0, min(step_idx, len(hidden_states_all) - 1))
-
-            # Lấy hidden state
-            hidden = hidden_states_all[step_idx][layer_idx]  # [B, seq_len_step, D]
-            actual_seq_len = hidden.shape[1]
-
-            # Clamp token_idx
-            token_idx_in_step = token_idx - (prompt_len if step_idx == 0 else 0)
-            token_idx_in_step = max(0, min(token_idx_in_step, actual_seq_len - 1))
-
-            emb = hidden[i, token_idx_in_step, :].cpu().numpy()
-            embeddings.append(emb)
-
-    # ================================
-    # 2. THIRD-PARTY EMBEDDING MODE
-    # ================================
-    elif mode == "third_party":
-        if sentence_embeddings is None:
-            raise ValueError("sentence_embeddings required for mode='third_party'")
-        embeddings = (
-            sentence_embeddings.cpu().numpy() 
-            if isinstance(sentence_embeddings, torch.Tensor) 
-            else np.array(sentence_embeddings)
-        )
-        if embeddings.ndim != 2:
-            raise ValueError(f"Expected (N, D) tensor, got {embeddings.shape}")
-
-    else:
-        raise ValueError("mode must be 'internal' or 'third_party'")
-
-    # ================================
-    # 3. FINAL: Compute EigenScore (N x N covariance)
-    # ================================
-    embeddings = np.array(embeddings)  # Shape: (N, D)
-    N = embeddings.shape[0]
-    
-    if N < 2:
-        return 0.0  # or raise warning
-
-    # CRUCIAL: Use sample covariance (N x N), NOT feature covariance
-    cov = np.cov(embeddings) # Shape: (N, N)
-    cov = cov + alpha * np.eye(N)  # Regularize
-
-    # SVD
-    u, s, vT = np.linalg.svd(cov)  # singular values
-    eigen_score = np.mean(np.log10(s))
-    
-
-    return -eigen_score  # Negative → higher diversity = higher uncertainty
 # ---------------- 
 ### PRO Score
 # ----------------
@@ -747,128 +466,12 @@ def approx(probs):
 def pro_score(generation, alpha=0.4):
     """Compute PRO score from generation."""
     nll_probs = np.exp(-np.array(generation["samples_nll"]))
-    # nll_probs /= nll_probs.sum()
     top_probs = np.sort(nll_probs)[::-1]
     filtered = top_probs[top_probs >= alpha]
     if len(filtered) == 0:
         filtered = np.array([top_probs[0]])
         
     return approx(filtered)
-
-# -------------------------------------
-### New clustering methods
-# -------------------------------------
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
-import numpy as np
-import torch
-from collections import defaultdict
-
-# -------------------------------
-# CLUSTERING FUNCTIONS
-# -------------------------------
-def compute_clusters(sample, embed_model=None, device='cuda:0',
-                     cluster_mode='pca_then_kmeans',
-                     max_components=10, max_k=10,
-                     semantic_model=None, semantic_tokenizer=None):
-    """
-    Compute cluster assignments using different methods:
-      - 'pca_only'         → PCA projections (1..max_components)
-      - 'kmeans_only'      → KMeans (k=1..max_k)
-      - 'pca_then_kmeans'  → PCA (n_components=1..max_components) then KMeans (k=1..max_k)
-      - 'semantic_clustering' → Clustering by semantic equivalence using NLI
-
-    Returns:
-      dict {config_key: cluster_ids}
-        e.g., 'pca3', 'kmeans5', 'pca3_k5', 'semantic'
-    """
-    generations = sample['cleaned_generated_texts']
-    all_cluster_assignments = {}
-
-    if cluster_mode in ['pca_only', 'kmeans_only', 'pca_then_kmeans']:
-        # --- Embeddings required ---
-        embeddings = embed_model.encode(generations, convert_to_tensor=False, device=device)
-
-        if cluster_mode == 'pca_only':
-            for n_comp in range(1, max_components + 1):
-                pca = PCA(n_components=n_comp)
-                reduced = pca.fit_transform(embeddings)
-                cluster_ids = np.digitize(reduced[:, 0],
-                                          np.percentile(reduced[:, 0], [25, 50, 75]))
-                all_cluster_assignments[f"pca{n_comp}"] = cluster_ids
-
-        elif cluster_mode == 'kmeans_only':
-            for k in range(1, max_k + 1):
-                kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto')
-                cluster_ids = kmeans.fit_predict(embeddings)
-                all_cluster_assignments[f"kmeans{k}"] = cluster_ids
-
-        elif cluster_mode == 'pca_then_kmeans':
-            for n_comp in range(1, max_components + 1):
-                pca = PCA(n_components=n_comp)
-                reduced = pca.fit_transform(embeddings)
-                for k in range(1, max_k + 1):
-                    kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto')
-                    cluster_ids = kmeans.fit_predict(reduced)
-                    all_cluster_assignments[f"pca{n_comp}_k{k}"] = cluster_ids
-
-    elif cluster_mode == 'semantic_clustering':
-        if semantic_model is None or semantic_tokenizer is None:
-            raise ValueError("semantic_model and semantic_tokenizer must be provided for semantic_clustering")
-        cluster_ids = compute_semantic_similarity(sample, semantic_model, semantic_tokenizer, device=device)
-        all_cluster_assignments['semantic'] = cluster_ids
-
-    else:
-        raise ValueError(f"Unknown cluster_mode: {cluster_mode}")
-
-    return all_cluster_assignments
-
-
-def compute_clusters_origin(sample, embed_model, device='cuda:0',
-                     cluster_mode='pca_then_kmeans',
-                     max_components=10, max_k=10):
-    """
-    Compute cluster assignments using different methods:
-      - 'pca_only'         → PCA projections (1..max_components)
-      - 'kmeans_only'      → KMeans (k=1..max_k)
-      - 'pca_then_kmeans'  → PCA (n_components=1..max_components) then KMeans (k=1..max_k)
-
-    Returns:
-      dict {config_key: cluster_ids}
-        e.g., 'pca3', 'kmeans5', or 'pca3_k5'
-    """
-    generations = sample['cleaned_generated_texts']
-    embeddings = embed_model.encode(generations, convert_to_tensor=False, device=device)
-    all_cluster_assignments = {}
-
-    if cluster_mode == 'pca_only':
-        for n_comp in range(1, max_components + 1):
-            pca = PCA(n_components=n_comp)
-            reduced = pca.fit_transform(embeddings)
-            # Simple grouping by quantiles of first principal component
-            cluster_ids = np.digitize(reduced[:, 0],
-                                      np.percentile(reduced[:, 0], [25, 50, 75]))
-            all_cluster_assignments[f"pca{n_comp}"] = cluster_ids
-
-    elif cluster_mode == 'kmeans_only':
-        for k in range(1, max_k + 1):
-            kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto')
-            cluster_ids = kmeans.fit_predict(embeddings)
-            all_cluster_assignments[f"kmeans{k}"] = cluster_ids
-
-    elif cluster_mode == 'pca_then_kmeans':
-        for n_comp in range(1, max_components + 1):
-            pca = PCA(n_components=n_comp)
-            reduced = pca.fit_transform(embeddings)
-            for k in range(1, max_k + 1):
-                kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto')
-                cluster_ids = kmeans.fit_predict(reduced)
-                all_cluster_assignments[f"pca{n_comp}_k{k}"] = cluster_ids
-    else:
-        raise ValueError(f"Unknown cluster_mode: {cluster_mode}")
-
-    return all_cluster_assignments
-
 
 # -------------------------------------
 ### Semantic Entropy

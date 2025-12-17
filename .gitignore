@@ -1,5 +1,7 @@
 *.ipynb
+__pycache__/
 log_error/
 log_output/
 bashfiles/
 results/
+local/

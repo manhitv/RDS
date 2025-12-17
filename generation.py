@@ -1,48 +1,29 @@
-from vllm import LLM, SamplingParams
 import os
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
 import argparse
 import pickle
-import random
 import numpy as np
-import torch
 import tqdm
 import evaluate
-from semantic_baselines import *
 import config
-import pandas as pd
-from datasets import load_dataset
 import json
-import sys
-sys.path.append('./..')
-from UGCS.reward_funcs.reward_fn import *
-from semantic_baselines import MODEL_PATH_DICT
 
-def extract_solution(solution_str):
-    string_in_last_boxed = last_boxed_only_string(solution_str)
-    if string_in_last_boxed is not None:
-        pred = remove_boxed(string_in_last_boxed)
-        
-        return pred
+from datasets import load_dataset
+from vllm import LLM, SamplingParams
+from utils import (
+    MODEL_PATH_DICT,
+    clean_answer, 
+    is_correct, 
+    create_demo_text, 
+    set_seed, 
+    clean_generation, 
+    flatten_logprobs
+    )
 
-    return None
-
-# --------------------
-# Utility setup
-# --------------------
-def set_seed(seed_value=10):
-    os.environ['PYTHONHASHSEED'] = str(seed_value)
-    random.seed(seed_value)
-    np.random.seed(seed_value)
-    torch.manual_seed(seed_value)
-   
-# --------------------
-# PARSE DATASET
-# --------------------
-def extract_hash_answer(text: str):
-    if "####" not in text:
-        return None
-    return text.split("####")[1].strip()
-
+# --------------------------------
+# DATASET PARSING
+# --------------------------------
 def parse_dataset(args):
     
     if args.dataset in ['sciq', 'nq']:
@@ -186,40 +167,7 @@ def parse_dataset(args):
 # --------------------
 # GENERATION + NLL
 # --------------------
-def flatten_logprobs(logprobs):
-    """
-    Flattens nested list[dict[token_id -> Logprob]] into a list of floats.
-    """
-    flat = []
-    if not logprobs:
-        return flat
-    if isinstance(logprobs, list):
-        for step in logprobs:
-            if isinstance(step, dict):
-                flat.extend([v.logprob for v in step.values()])
-    elif isinstance(logprobs, dict):
-        flat.extend([v.logprob for v in logprobs.values()])
-    return flat
-
-### For self-certainty
-def confidence_logprob_sum(logprob_sum: torch.Tensor, attention_mask: torch.Tensor, V: int):
-    """
-    Calculate the confidence of the logprob_sum.
-    logprob_sum: torch.Tensor, shape (batch_size, seq_length) or (seq_length)
-    attention_mask: torch.Tensor, shape (batch_size, seq_length) or (seq_length)
-    V: int, the vocab size
-    """
-    logprob_sum = logprob_sum.contiguous()
-    attention_mask = attention_mask.contiguous()
-    V_tensor = torch.tensor(V, dtype=logprob_sum.dtype, device=logprob_sum.device)
-    conf = -1/V * logprob_sum - torch.log(V_tensor)
-    valid_conf = conf * attention_mask
-    batch_confidence_list = (valid_conf.sum(dim=-1) / attention_mask.sum(dim=-1)).tolist()
-    return batch_confidence_list
-
-
-import torch.nn.functional as F
-def generate_sequences(llm, dataset, rouge, args, tokenizer=None):
+def generate_sequences(llm, dataset, rouge, args):
     
     print('--- GENERATION PARAMETERS ---')
     print('Dataset:', args.dataset)
@@ -238,230 +186,83 @@ def generate_sequences(llm, dataset, rouge, args, tokenizer=None):
         logprobs=1
     )
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     sequences = []
     for i, batch in enumerate(tqdm.tqdm(dataset)):
         prompt = batch['prompt']
         question = batch['question']
         answer = batch['answer']
 
-        if args.generation_mode == 'transformer':
-            # Encode prompt
-            enc = tokenizer(
-                prompt,
-                return_tensors="pt",
-                padding=False,
-                truncation=True,
-                max_length=2048,  # tránh quá dài
-                add_special_tokens=False,
-            ).to(device)
-
-            input_ids = enc["input_ids"][0]
-            input_mask = enc["attention_mask"][0]
-            input_length = input_mask.sum().item()
-
-            # Giả sử bạn đã có list các generated outputs (ví dụ từ file trước đó)
-            # → ở đây mình giả sử biến outputs đã tồn tại (như trong file confidence_with_file)
-            if 'outputs' not in locals() and 'generated_texts' not in locals():
-                raise ValueError("Bạn cần cung cấp list outputs (generated texts) để tính confidence ở mode transformers")
-
-            outputs = outputs if 'outputs' in locals() else generated_texts  # tùy bạn đặt tên gì
-
-            batch_size = 4
-            final_confidences = [None] * len(outputs)
-
-            # Group theo độ dài để tránh OOM
-            groups = {"small": [], "medium": [], "large": []}
-            indices = {"small": [], "medium": [], "large": []}
-            for idx, text in enumerate(outputs):
-                if len(text) > 6144:
-                    groups["large"].append(text)
-                    indices["large"].append(idx)
-                elif len(text) > 3072:
-                    groups["medium"].append(text)
-                    indices["medium"].append(idx)
-                else:
-                    groups["small"].append(text)
-                    indices["small"].append(idx)
-
-            group_batch_sizes = {
-                "small": batch_size,
-                "medium": max(1, batch_size // 2),
-                "large": max(1, batch_size // 4)
-            }
-
-            for group_name in ["small", "medium", "large"]:
-                texts = groups[group_name]
-                idxs = indices[group_name]
-                if not texts:
-                    continue
-
-                cur_bs = group_batch_sizes[group_name]
-
-                # Tokenize outputs
-                tokenized = tokenizer(
-                    texts,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=2048,
-                    add_special_tokens=False,
-                ).to(device)
-
-                out_ids = tokenized["input_ids"]          # [N, L_out]
-                out_mask = tokenized["attention_mask"]    # [N, L_out]
-
-                # Tạo full sequence: prompt + output
-                full_ids = torch.cat([input_ids.unsqueeze(0).expand(len(texts), -1), out_ids], dim=1)
-                full_mask = torch.cat([input_mask.unsqueeze(0).expand(len(texts), -1), out_mask], dim=1)
-
-                confidences = []
-
-                for start in range(0, len(texts), cur_bs):
-                    end = start + cur_bs
-                    batch_ids = full_ids[start:end]
-                    batch_mask = full_mask[start:end]
-                    batch_out_ids = out_ids[start:end]  # token thật của output
-
-                    with torch.autocast("cuda", dtype=torch.bfloat16):
-                        logits = llm(batch_ids, attention_mask=batch_mask).logits
-                        # Chỉ lấy phần output (bỏ prompt)
-                        shift_logits = logits[:, input_length-1:-1, :]  # vì target là từ token thứ input_length trở đi
-                        shift_labels = batch_out_ids
-
-                        log_probs = F.log_softmax(shift_logits, dim=-1)
-                        # Lấy logprob của đúng token
-                        token_logprobs = log_probs.gather(-1, shift_labels.unsqueeze(-1)).squeeze(-1)  # [bs, seq_out]
-
-                        # Mask padding
-                        valid_mask = (shift_labels != tokenizer.pad_token_id)
-                        token_logprobs = token_logprobs * valid_mask
-
-                        # Tính average logprob (negative → certainty cao hơn)
-                        avg_logprobs = token_logprobs.sum(dim=-1) / valid_mask.sum(dim=-1)  # [bs]
-                        confidences.extend(avg_logprobs.tolist())
-
-                for conf, orig_idx in zip(confidences, idxs):
-                    final_confidences[orig_idx] = conf
-
-            # Clean text (bắt buộc phải có để đồng bộ)
-            cleaned = [clean_generation(text) for text in outputs]
-
-            sequences.append({
-                "id": f"{args.dataset}_{i}",
-                "prompt": prompt,
-                "question": question,
-                "answer": answer,
-                "generated_texts": outputs,
-                "cleaned_generated_texts": cleaned,
-                "samples_ce": final_confidences,   # ← ĐÚNG tên field như vLLM
-            })
-            continue
-                
-            # --> load greedy generation/eval_score from vllm output pickle and calculate self-certainty later 
+        # === GREEDY DECODING ===
+        greedy_out = llm.generate(prompt, sampling_params=greedy_params)[0].outputs[0]
+        if args.dataset == 'gsm8k':
+            greedy_text = greedy_out.text.strip()
         else:
-            # === GREEDY DECODING ===
-            greedy_out = llm.generate(prompt, sampling_params=greedy_params)[0].outputs[0]
-            if args.dataset == 'gsm8k':
-                greedy_text = greedy_out.text.strip()
-            else:
-                greedy_text = clean_generation(greedy_out.text)
-                
-            greedy_logprobs = greedy_out.logprobs
-
-            if args.dataset in ['svamp', 'arith']: # exact match for math datasets
-                eval_score = greedy_text.strip() == answer.strip()
-            elif args.dataset == 'gsm8k':
-                model_answer = clean_answer(greedy_text)
-                eval_score = is_correct(model_answer=model_answer, answer=answer)
-            else:
-                eval_score = rouge.compute(predictions=[greedy_text], references=[answer])['rougeL']
-
-            # === MULTINOMIAL DECODING ===
-            sampled_outputs = llm.generate(prompt, sampling_params=multinomial_params)[0].outputs
-            generated_texts = [o.text for o in sampled_outputs]
-            generation_logprobs = [o.logprobs for o in sampled_outputs]
-
-            # === CLEANING ===
-            cleaned = [clean_generation(g) for g in generated_texts]
-
-            # === UNCERTAINTY (negative log-likelihood) ===
-            samples_avg_nll, samples_nll = [], []
+            greedy_text = clean_generation(greedy_out.text)
             
-            for sample in generation_logprobs:
-                flat = flatten_logprobs(sample)
-                avg_nll = -np.mean(flat) if len(flat) > 0 else np.nan
-                nll = -np.sum(flat) if len(flat) > 0 else np.nan
-                samples_avg_nll.append(avg_nll)
-                samples_nll.append(nll)
+        greedy_logprobs = greedy_out.logprobs
 
-            greedy_flat = flatten_logprobs(greedy_logprobs)
-            greedy_avg_nll = -np.mean(greedy_flat) if greedy_flat else np.nan
-            greedy_nll = -np.sum(greedy_flat) if greedy_flat else np.nan
+        if args.dataset in ['svamp', 'arith']: # exact match for math datasets
+            eval_score = greedy_text.strip() == answer.strip()
+        elif args.dataset == 'gsm8k':
+            model_answer = clean_answer(greedy_text)
+            eval_score = is_correct(model_answer=model_answer, answer=answer)
+        else:
+            eval_score = rouge.compute(predictions=[greedy_text], references=[answer])['rougeL']
 
-            # === DEBUG PRINTS ===
-            if i < 5:
-                print('Prompt:', prompt)
-                print('Question:', question)
-                print('Answer:', answer)
-                print('Greedy text:', greedy_text)
-                print('Greedy logprobs:', greedy_logprobs)
-                print('Samples avg NLL:', samples_avg_nll)
-                print('Samples NLL:', samples_nll)
-                print('Eval score:', eval_score)
-                print('---')
+        # === MULTINOMIAL DECODING ===
+        sampled_outputs = llm.generate(prompt, sampling_params=multinomial_params)[0].outputs
+        generated_texts = [o.text for o in sampled_outputs]
+        generation_logprobs = [o.logprobs for o in sampled_outputs]
 
-            # === STRUCTURE OUTPUT ===
-            sequences.append({
-                'id': f"{args.dataset}_{i}",
-                'prompt': prompt,
-                'question': question,
-                'answer': answer,
-                'generated_texts': generated_texts,
-                'cleaned_generated_texts': cleaned,
-                'samples_nll': samples_nll,
-                'samples_avg_nll': samples_avg_nll,
-                'greedy_text': greedy_text,
-                'greedy_nll': greedy_nll,
-                'greedy_avg_nll': greedy_avg_nll,
-                'eval_score': eval_score
-            })
+        # === CLEANING ===
+        cleaned = [clean_generation(g) for g in generated_texts]
+
+        # === UNCERTAINTY (negative log-likelihood) ===
+        samples_avg_nll, samples_nll = [], []
+        
+        for sample in generation_logprobs:
+            flat = flatten_logprobs(sample)
+            avg_nll = -np.mean(flat) if len(flat) > 0 else np.nan
+            nll = -np.sum(flat) if len(flat) > 0 else np.nan
+            samples_avg_nll.append(avg_nll)
+            samples_nll.append(nll)
+
+        greedy_flat = flatten_logprobs(greedy_logprobs)
+        greedy_avg_nll = -np.mean(greedy_flat) if greedy_flat else np.nan
+        greedy_nll = -np.sum(greedy_flat) if greedy_flat else np.nan
+
+        # === DEBUG PRINTS ===
+        if i < 5:
+            print('Prompt:', prompt)
+            print('Question:', question)
+            print('Answer:', answer)
+            print('Greedy text:', greedy_text)
+            print('Greedy logprobs:', greedy_logprobs)
+            print('Samples avg NLL:', samples_avg_nll)
+            print('Samples NLL:', samples_nll)
+            print('Eval score:', eval_score)
+            print('---')
+
+        # === STRUCTURE OUTPUT ===
+        sequences.append({
+            'id': f"{args.dataset}_{i}",
+            'prompt': prompt,
+            'question': question,
+            'answer': answer,
+            'generated_texts': generated_texts,
+            'cleaned_generated_texts': cleaned,
+            'samples_nll': samples_nll,
+            'samples_avg_nll': samples_avg_nll,
+            'greedy_text': greedy_text,
+            'greedy_nll': greedy_nll,
+            'greedy_avg_nll': greedy_avg_nll,
+            'eval_score': eval_score
+        })
         
     return sequences
 
-
-def clean_generation(text):
-    for s in ['.', '\n', 'Q:', 'A:', 'question:', 'answer:', 'Question:', 'Answer:', 'Questions:', 'questions:', 'QUESTION:', 'ANSWER:', ':']:
-        if s in text:
-            text = text.split(s)[0].rstrip()
-    return text.strip()
-
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-def load_model_tf(model_dir, device='cuda'):
-    llm = AutoModelForCausalLM.from_pretrained(
-        model_dir,
-        torch_dtype=torch.float16
-    ).to(device)
-    tokenizer = AutoTokenizer.from_pretrained(model_dir, padding=True)
-    
-    # Add padding token if it is not already present.
-    if tokenizer.pad_token is None:
-        tokenizer.add_special_tokens({"pad_token": "<pad>"})
-        llm.config.pad_token_id = tokenizer.pad_token_id
-        llm.resize_token_embeddings(len(tokenizer))
-        llm.embed_tokens = torch.nn.Embedding(
-            llm.config.vocab_size, llm.config.hidden_size, padding_idx=llm.config.pad_token_id
-        ).to(device)
-        print("Added padding token to tokenizer")
-        
-    tokenizer.padding_side = "right"
-    
-    llm.eval()
-    print("Loaded model and tokenizer.")
-    return llm, tokenizer
 # --------------------
-# MAIN EVALUATION PIPELINE
+# MAIN PIPELINE
 # --------------------
 def main(args):
     experiment_id = os.getpid()
@@ -477,17 +278,14 @@ def main(args):
 
     # Init model
     hf_model_dir = MODEL_PATH_DICT[args.model]
-    if args.generation_mode == 'transformer':
-        llm, tokenizer = load_model_tf(hf_model_dir)
-    else:
-        llm = LLM(model=hf_model_dir, dtype="bfloat16", gpu_memory_utilization=0.9, max_model_len=2048)
-        tokenizer = None
+    llm = LLM(model=hf_model_dir, dtype="bfloat16", gpu_memory_utilization=0.9, max_model_len=2048)
     print(f"Loaded model {args.model} for generation.")
+    
     # Run generation
-    sequences = generate_sequences(llm=llm, dataset=dataset, rouge=rouge, args=args, tokenizer=tokenizer)
+    sequences = generate_sequences(llm=llm, dataset=dataset, rouge=rouge, args=args)
     
     # Save
-    output_path = f"{config.output_dir}/{args.dataset}__{args.model}__{args.n_samples}__generation{args.generation_mode}.pkl"
+    output_path = f"{config.output_dir}/{args.dataset}__{args.model}__{args.n_samples}__generation.pkl"
     with open(output_path, "wb") as f:
         pickle.dump(sequences, f)
 
@@ -506,7 +304,6 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='gemma-7b', required=True)
     parser.add_argument('--dataset', type=str, default='coqa', required=True)
     parser.add_argument('--max_new_tokens', type=int, default=32)
-    parser.add_argument('--generation_mode', type=str, default='', help='Decide to use transformer or vllm for generation')
     
     args = parser.parse_args()
     set_seed(10)
