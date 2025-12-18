@@ -96,7 +96,7 @@ def main(args):
         majority_sample = freq.most_common(1)[0][0]
         
         if args.self_certainty:
-            sc_cache_path = f"{config.output_dir}/{args.dataset}__{args.model}__self_certainty.pkl"
+            sc_cache_path = f"{config.output_dir}/{args.dataset}__{args.model}__{args.n_samples}__self_certainty.pkl"
             os.makedirs(os.path.dirname(sc_cache_path), exist_ok=True)
 
             if os.path.exists(sc_cache_path):
@@ -158,7 +158,7 @@ def main(args):
         print(f"{method:55s} → ACC: {final_acc:.4f}")
 
     # --- Save results ---
-    json_path = f"{config.result_dir}/{args.dataset}__{args.model}__ranking.json"
+    json_path = f"{config.result_dir}/{args.dataset}__{args.model}__{args.n_samples}__ranking.json"
     with open(json_path, "w") as f:
         json.dump(results, f, indent=4)
     print(f"📄 Saved results summary to {json_path}")

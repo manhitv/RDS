@@ -1,4 +1,4 @@
-hf_cache_dir = '...'    # Hugging Face cache directory
-data_dir = '...'        # Directory for datasets
-output_dir = '...'      # Directory for output files
-result_dir = '...'      # Directory for results
+hf_cache_dir = '...'    # Huggingface cache directory
+data_dir = '...'        # Data directory
+output_dir = '...'      # Output directory
+result_dir = '...'      # Results directory
