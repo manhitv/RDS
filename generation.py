@@ -18,7 +18,8 @@ from utils import (
     create_demo_text, 
     set_seed, 
     clean_generation, 
-    flatten_logprobs
+    flatten_logprobs,
+    compute_label
     )
 
 # --------------------------------
@@ -201,13 +202,15 @@ def generate_sequences(llm, dataset, rouge, args):
             
         greedy_logprobs = greedy_out.logprobs
 
+        llm_label = None
         if args.dataset in ['svamp', 'arith']: # exact match for math datasets
-            eval_score = greedy_text.strip() == answer.strip()
+            eval_score = compute_label(greedy_text, answer, eval_method='exact_match')
         elif args.dataset == 'gsm8k':
             model_answer = clean_answer(greedy_text)
             eval_score = is_correct(model_answer=model_answer, answer=answer)
         else:
-            eval_score = rouge.compute(predictions=[greedy_text], references=[answer])['rougeL']
+            eval_score = compute_label(greedy_text, answer, rouge=rouge, eval_method='rougeL')
+            llm_label = compute_label(greedy_text, answer, question=question, eval_method='llm_eval', api_type=args.api_type)
 
         # === MULTINOMIAL DECODING ===
         sampled_outputs = llm.generate(prompt, sampling_params=multinomial_params)[0].outputs
@@ -256,7 +259,8 @@ def generate_sequences(llm, dataset, rouge, args):
             'greedy_text': greedy_text,
             'greedy_nll': greedy_nll,
             'greedy_avg_nll': greedy_avg_nll,
-            'eval_score': eval_score
+            'eval_score': eval_score,
+            "llm_label": llm_label
         })
         
     return sequences
@@ -285,7 +289,7 @@ def main(args):
     sequences = generate_sequences(llm=llm, dataset=dataset, rouge=rouge, args=args)
     
     # Save
-    output_path = f"{config.output_dir}/{args.dataset}__{args.model}__{args.n_samples}__generation.pkl"
+    output_path = f"{config.output_dir}/{args.dataset}_{args.model}_N={args.n_samples}_F={args.fraction_of_data_to_use}_A={args.api_type}_S={args.seed}__generation.pkl"
     with open(output_path, "wb") as f:
         pickle.dump(sequences, f)
 
@@ -304,7 +308,9 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='gemma-7b', required=True)
     parser.add_argument('--dataset', type=str, default='coqa', required=True)
     parser.add_argument('--max_new_tokens', type=int, default=32)
+    parser.add_argument('--seed', type=int, default=10, help='Random seed for reproducibility')
+    parser.add_argument('--api_type', type=str, default='cohere', choices=['gemini', 'cohere'], help='API type for LLM evaluation')
     
     args = parser.parse_args()
-    set_seed(10)
+    set_seed(args.seed)
     main(args)

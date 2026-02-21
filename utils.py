@@ -1,3 +1,5 @@
+from http.client import responses
+
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -7,6 +9,9 @@ import re
 import random
 import os
 import config
+import api_key
+import cohere
+from gooogle import genai
 
 ANSWER_TRIGGER = 'The answer is'
 ANS_RE = re.compile(r"#### (\-?[0-9\.\,]+)")
@@ -77,7 +82,7 @@ def flatten_logprobs(logprobs):
 
 
 def clean_generation(text):
-    for s in ['.', '\n', 'Q:', 'A:', 'question:', 'answer:', 'Question:', 'Answer:', 'Questions:', 'questions:', 'QUESTION:', 'ANSWER:', ':']:
+    for s in ['Q:', 'A:', 'question:', 'answer:', 'Question:', 'Answer:', 'Questions:', 'questions:', 'QUESTION:', 'ANSWER:', ':']:
         if s in text:
             text = text.split(s)[0].rstrip()
     return text.strip()
@@ -109,6 +114,77 @@ def load_model_from_path(model_name, device):
 
     return model, tokenizer 
 
+
+### ---------------------------------
+### Label computation utils
+### ---------------------------------
+def cohere_evaluate(message):
+    cohere_client = cohere.ClientV2(api_key=config.cohere_api_key)
+    try:
+        response = cohere_client.chat(messages=message, model=api_key.cohere_model)
+        return response.message.content[0].text
+    except Exception as e:
+        print("Evaluation Error: ", e)
+        print(message)
+        return None
+
+
+def gemini_evaluate(message):
+    gemini_client = genai.Client(api_key=api_key.gemini_api_key)
+    try: 
+        message = message[0]["content"] if message else "" # [role: user, content: prompt]
+        response = gemini_client.models.generate_content(model=api_key.gemini_model, contents=message)
+        return response.text
+    except Exception as e:
+        print("Evaluation Error: ", e)
+        print(message)
+        return None
+
+def compute_label(generation, ground_truth, question=None, rouge=None, eval_method="exact_match", api_type='cohere'):
+    if eval_method == "exact_match":
+        return generation == ground_truth
+    elif eval_method == "rougeL":
+        rouge_output = rouge.compute(predictions=[generation], references=[ground_truth])
+        return rouge_output["rougeL"]
+    elif eval_method == "llm_eval":
+        message = [
+                {
+                    "role": "user", 
+                    "content": f"""You are a helpful and precise assistant for checking the quality of the answer.
+                    Question: {question}
+                    Ground Truth: {ground_truth}
+                    Answer To Be Evaluated: {generation}
+                    Is the answer correct? Please answer with 'Yes' or 'No'."""}
+            ]
+        if api_type == 'cohere':
+            llm_response = cohere_evaluate(message)
+        elif api_type == 'gemini':
+            llm_response = gemini_evaluate(message)
+        else:
+            raise ValueError(f"Unsupported API type: {api_type}")
+        
+        return 1 if llm_response and llm_response.strip().lower().startswith("yes") else 0
+    else:
+        raise ValueError(f"Unsupported eval method: {eval_method}")
+
+
+def compute_ece(confidence, labels, n_bins=15):
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    bin_ids = np.digitize(confidence, bins) - 1
+
+    ece = 0.0
+    for i in range(n_bins):
+        mask = bin_ids == i
+        if np.any(mask):
+            acc = np.mean(1 - labels[mask])  # 1 = correct
+            conf = np.mean(confidence[mask])
+            ece += np.abs(acc - conf) * np.sum(mask) / len(labels)
+
+    return ece
+
+def minmax_normalize(x):
+    x = np.array(x)
+    return (x - x.min()) / (x.max() - x.min() + 1e-12)
 ### ---------------------------------
 ### Metric computation utils
 ### ---------------------------------
@@ -530,20 +606,23 @@ def compute_semantic_entropy(sample, embed_model, embed_tokenizer, device='cuda:
         return torch.tensor(0.0, dtype=torch.float32, device=avg_nll.device)
     
     # Aggregate log-likelihoods for each semantic set
-    aggregated_log_probs = []
+    aggregated_log_probs, dse_log_probs = [], []
     for set_id in valid_set_ids:
         mask = (semantic_set_ids == set_id)
         agg_log_prob = torch.logsumexp(avg_nll[mask], dim=0)
         aggregated_log_probs.append(agg_log_prob)
+        dse_log_probs.append(len(mask.nonzero()) / len(semantic_set_ids))  # DSE weight based on set size
     
     # Convert to tensor and compute probabilities
     aggregated_log_probs = torch.tensor(aggregated_log_probs, dtype=torch.float32, device=avg_nll.device)
     probs = torch.softmax(aggregated_log_probs, dim=0)  # Normalize to probabilities
+    dse_probs = torch.tensor(dse_log_probs, dtype=torch.float32, device=avg_nll.device)
     
     # Compute entropy: -sum(p * log(p))
     entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=0)  # Add epsilon to avoid log(0)
+    dse_entropy = -torch.sum(dse_probs * torch.log(dse_probs + 1e-10), dim=0)
     
-    return entropy.item()
+    return entropy.item(), dse_entropy.item()
 
 # -------------------------------------
 ### Compute DEg and Semantic Density

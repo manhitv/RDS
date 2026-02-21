@@ -1,4 +1,4 @@
-hf_cache_dir = '...'    # Huggingface cache directory
-data_dir = '...'        # Data directory
-output_dir = '...'      # Output directory
-result_dir = '...'      # Results directory
+hf_cache_dir = '/scratch/s224852302/VAR/hf_cache'
+data_dir = '/scratch/s224852302/VAR/datasets'
+output_dir = '/scratch/s224852302/VAR/output'
+result_dir = '/home/s224852302/RDS/results' # 
