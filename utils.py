@@ -11,7 +11,10 @@ import os
 import config
 import api_key
 import cohere
-from gooogle import genai
+from google import genai
+import networkx as nx
+from scipy.linalg import expm
+
 
 ANSWER_TRIGGER = 'The answer is'
 ANS_RE = re.compile(r"#### (\-?[0-9\.\,]+)")
@@ -57,6 +60,26 @@ MODEL_PATH_DICT = {
     "mistral-large": "mistralai/Mistral-Large-Instruct-2407"
 }
 
+
+def load_huggingface_model(model_name):
+    hf_model = MODEL_PATH_DICT.get(model_name)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        hf_model,
+        padding_side="left",
+        trust_remote_code=True,
+        use_fast=False if "falcon3" in hf_model else True,
+    )
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        hf_model,
+        torch_dtype=torch.float16,
+        device_map="auto",
+        trust_remote_code=True,
+        cache_dir=config.hf_cache_dir
+    )
+    
+    return tokenizer, model
 
 def set_seed(seed_value=10):
     os.environ['PYTHONHASHSEED'] = str(seed_value)
@@ -119,7 +142,7 @@ def load_model_from_path(model_name, device):
 ### Label computation utils
 ### ---------------------------------
 def cohere_evaluate(message):
-    cohere_client = cohere.ClientV2(api_key=config.cohere_api_key)
+    cohere_client = cohere.ClientV2(api_key=api_key.cohere_api_key)
     try:
         response = cohere_client.chat(messages=message, model=api_key.cohere_model)
         return response.message.content[0].text
@@ -155,13 +178,18 @@ def compute_label(generation, ground_truth, question=None, rouge=None, eval_meth
                     Ground Truth: {ground_truth}
                     Answer To Be Evaluated: {generation}
                     Is the answer correct? Please answer with 'Yes' or 'No'."""}
+        
             ]
-        if api_type == 'cohere':
-            llm_response = cohere_evaluate(message)
-        elif api_type == 'gemini':
-            llm_response = gemini_evaluate(message)
-        else:
-            raise ValueError(f"Unsupported API type: {api_type}")
+        try:
+            if api_type == 'cohere':
+                llm_response = cohere_evaluate(message)
+            elif api_type == 'gemini':
+                llm_response = gemini_evaluate(message)
+            else:
+                raise ValueError(f"Unsupported API type: {api_type}")
+        except Exception as e:
+            print(f"Error during LLM evaluation: {e}")
+            llm_response = None
         
         return 1 if llm_response and llm_response.strip().lower().startswith("yes") else 0
     else:
@@ -597,32 +625,37 @@ def compute_semantic_entropy(sample, embed_model, embed_tokenizer, device='cuda:
     
     # Convert inputs to tensors
     avg_nll = torch.as_tensor(sample['samples_avg_nll'], dtype=torch.float32)
+    log_probs = -avg_nll  # Convert NLL to log-probabilities -- important for correct entropy calculation
     semantic_set_ids = torch.as_tensor(semantic_set_ids, dtype=torch.int64)
 
     # Get unique semantic set IDs (excluding -1)
     valid_set_ids = torch.unique(semantic_set_ids[semantic_set_ids != -1])
     
-    if len(valid_set_ids) == 0:
-        return torch.tensor(0.0, dtype=torch.float32, device=avg_nll.device)
+    if valid_set_ids.numel() == 0:
+        return [0, 0, 0]  # No valid sets, return zero entropy
     
     # Aggregate log-likelihoods for each semantic set
     aggregated_log_probs, dse_log_probs = [], []
     for set_id in valid_set_ids:
         mask = (semantic_set_ids == set_id)
-        agg_log_prob = torch.logsumexp(avg_nll[mask], dim=0)
+        agg_log_prob = torch.logsumexp(log_probs[mask], dim=0)
         aggregated_log_probs.append(agg_log_prob)
         dse_log_probs.append(len(mask.nonzero()) / len(semantic_set_ids))  # DSE weight based on set size
     
     # Convert to tensor and compute probabilities
-    aggregated_log_probs = torch.tensor(aggregated_log_probs, dtype=torch.float32, device=avg_nll.device)
+    # aggregated_log_probs = torch.tensor(aggregated_log_probs, dtype=torch.float32, device=avg_nll.device)
+    aggregated_log_probs = torch.stack(aggregated_log_probs)
+
     probs = torch.softmax(aggregated_log_probs, dim=0)  # Normalize to probabilities
-    dse_probs = torch.tensor(dse_log_probs, dtype=torch.float32, device=avg_nll.device)
+    # dse_probs = torch.tensor(dse_log_probs, dtype=torch.float32, device=avg_nll.device)
+    dse_log_probs = torch.stack(dse_log_probs)
+    dse_probs = torch.softmax(dse_log_probs, dim=0)  # Normalize DSE weights to probabilities
     
     # Compute entropy: -sum(p * log(p))
     entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=0)  # Add epsilon to avoid log(0)
     dse_entropy = -torch.sum(dse_probs * torch.log(dse_probs + 1e-10), dim=0)
     
-    return entropy.item(), dse_entropy.item()
+    return entropy.item(), dse_entropy.item(), len(valid_set_ids)
 
 # -------------------------------------
 ### Compute DEg and Semantic Density
@@ -697,3 +730,233 @@ def compute_deg_semantic_density(sample, embed_model, embed_tokenizer, device='c
     sd = 1 - semantic_density / likelihood_sum if likelihood_sum > 0 else 1
 
     return deg, sd
+
+
+import numpy as np
+import torch
+import networkx as nx
+from scipy.linalg import expm
+
+def compute_graph_baselines(
+    generated_texts,
+    semantic_model,
+    semantic_tokenizer,
+    device="cuda:0",
+    temp=1.0,
+    kle_t=1.0,      # heat kernel temperature
+    eps=1e-12
+):
+    """
+    Graph baselines + KLE (Kernel Language Entropy)
+
+    Returns:
+        dict:
+            LexicalSim
+            Deg
+            Ecc
+            EigenLap
+            KLE
+    """
+
+    N = len(generated_texts)
+    num_labels = semantic_model.config.num_labels
+    logits_mat = np.zeros((N, N, num_labels))
+
+    # ---------------------------
+    # Step 1 — pairwise NLI logits
+    # ---------------------------
+    for i in range(N):
+        for j in range(N):
+            input_text = generated_texts[i] + " [SEP] " + generated_texts[j]
+
+            encoded = semantic_tokenizer(
+                input_text,
+                padding=True,
+                return_tensors="pt"
+            ).to(device)
+
+            with torch.no_grad():
+                logits = semantic_model(**encoded).logits[0].cpu().numpy()
+
+            logits_mat[i, j] = logits
+
+    # ---------------------------
+    # Step 2 — entailment adjacency
+    # ---------------------------
+    probs = np.exp(logits_mat / temp)
+    probs /= probs.sum(-1, keepdims=True)
+
+    adjacency = probs[..., 0]  # entailment
+    adjacency = 0.5 * (adjacency + adjacency.T)  # make symmetric
+    np.fill_diagonal(adjacency, 0)
+
+    # ---------------------------
+    # Baseline 1 — Lexical similarity proxy
+    # ---------------------------
+    lexical_sim = adjacency.mean()
+
+    # ---------------------------
+    # Degree & UDeg
+    # ---------------------------
+    degree_vals = adjacency.sum(axis=1)
+    degree_matrix = np.diag(degree_vals)
+
+    m = adjacency.shape[0]
+    Udeg = np.trace(m * np.eye(m) - degree_matrix) / (m**2)
+
+    # ---------------------------
+    # Laplacian
+    # ---------------------------
+    laplacian = degree_matrix - adjacency
+
+    eigvals_L = np.linalg.eigvalsh(laplacian)
+    sum_eigenvalues = np.sum(eigvals_L)
+
+    # ---------------------------
+    # Eccentricity
+    # ---------------------------
+    G = nx.from_numpy_array(adjacency)
+
+    for u, v, d in G.edges(data=True):
+        d["weight"] = 1.0 / (d["weight"] + 1e-8)
+
+    ecc = nx.eccentricity(
+        G,
+        sp=dict(nx.all_pairs_dijkstra_path_length(G, weight="weight"))
+    )
+
+    avg_eccentricity = np.mean(list(ecc.values()))
+
+    # =========================================================
+    # 🧠 KLE — Kernel Language Entropy
+    # =========================================================
+
+    # Heat kernel from Laplacian
+    K = expm(-kle_t * laplacian)
+
+    # unit trace normalization
+    K /= np.trace(K)
+
+    eigvals_K = np.linalg.eigvalsh(K)
+    eigvals_K = np.clip(eigvals_K, eps, None)
+
+    KLE = -np.sum(eigvals_K * np.log(eigvals_K))
+
+    # ---------------------------
+    return {
+        "LexicalSim": lexical_sim,
+        "Deg": Udeg,
+        "Ecc": avg_eccentricity,
+        "EigenLap": sum_eigenvalues,
+        "KLE": KLE,
+    }
+    
+
+### Semantic Volume
+def semantic_volume(
+    embeddings,
+    pca_dim=10,
+    eps=1e-12,
+    log_volume=True
+):
+    """
+    embeddings: (N, D) tensor
+    """
+
+    X = embeddings
+    N, D = X.shape
+
+    if N <= 1:
+        return torch.tensor(0.0, device=X.device)
+
+    # center
+    X = X - X.mean(dim=0, keepdim=True)
+
+    # PCA via SVD
+    k = min(pca_dim, N, D)
+    U, S, Vh = torch.linalg.svd(X, full_matrices=False)
+
+    # project
+    X_pca = X @ Vh[:k].T
+
+    cov = (X_pca.T @ X_pca) / (N - 1)
+
+    eigvals = torch.linalg.eigvalsh(cov).clamp_min(eps)
+
+    if log_volume:
+        return 0.5 * torch.sum(torch.log(eigvals))
+    else:
+        return torch.sqrt(torch.prod(eigvals))
+
+ 
+### Compute P(True)
+def get_logprob_of_token(
+    model,
+    tokenizer,
+    prompt: str,
+    target_token: str = "A",
+    device: str = "cuda"
+) -> float:
+    model.eval()
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits  # (1, seq_len, vocab)
+
+    # next-token distribution
+    next_token_logits = logits[0, -1]  # (vocab,)
+
+    log_probs = F.log_softmax(next_token_logits, dim=-1)
+
+    target_id = tokenizer.encode(target_token, add_special_tokens=False)[0]
+
+    return log_probs[target_id].item()
+
+def calculate_p_true(
+    model,
+    tokenizer,
+    question: str,
+    most_probable_answer: str,
+    brainstormed_answers: list[str],
+    few_shot_prompt: str = "",
+    hint: bool = False,
+    device: str = "cuda",
+) -> float:
+
+    # ===== Build prompt =====
+    prompt = f"{few_shot_prompt}\n" if few_shot_prompt else ""
+
+    prompt += f"Question: {question}\n"
+
+    prompt += "Brainstormed Answers:\n"
+    for ans in brainstormed_answers:
+        prompt += f"{ans.strip()}\n"
+
+    prompt += f"{most_probable_answer.strip()}\n"
+    prompt += f"Possible answer: {most_probable_answer}\n"
+
+    if not hint:
+        prompt += (
+            "Is the possible answer:\n"
+            "A) True\n"
+            "B) False\n"
+            "The possible answer is:"
+        )
+    else:
+        prompt += (
+            "Do the brainstormed answers match the possible answer? "
+            "Respond with A if they do, B if they do not. Answer:"
+        )
+
+    # ===== Compute log P(True) =====
+    log_p_true = get_logprob_of_token(
+        model=model,
+        tokenizer=tokenizer,
+        prompt=prompt,
+        target_token="A",
+        device=device
+    )
+
+    return log_p_true

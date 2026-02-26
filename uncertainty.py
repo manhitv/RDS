@@ -23,6 +23,9 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from utils import (
+    calculate_p_true,
+    compute_graph_baselines,
+    load_huggingface_model,
     set_seed,
     compute_weighted_mean,
     compute_semantic_entropy, 
@@ -57,10 +60,6 @@ def main(args, semantic_model, semantic_tokenizer):
         cleaned_texts = gen["cleaned_generated_texts"]
         samples_avg_nll = gen["samples_avg_nll"]
 
-        # --- Weighting sets ---
-        probs = np.exp(-np.array(samples_avg_nll))
-        probs /= probs.sum()
-
         # --- Embeddings ---
         embeddings = embed_model.encode(cleaned_texts, convert_to_tensor=True, device=device)
         embeddings = F.normalize(embeddings, p=2, dim=1)
@@ -74,13 +73,12 @@ def main(args, semantic_model, semantic_tokenizer):
         
         # --- RDS weighted version ---
         probs = np.exp(-np.array(samples_avg_nll))
-        probs /= probs.sum() 
-        weighted_mean_embeddings = compute_weighted_mean(
-                embeddings, torch.tensor(probs, dtype=torch.float32, device=device)
-        )        
+        probs /= probs.sum()
+        probs = torch.tensor(probs, dtype=torch.float32, device=device)
+        weighted_mean_embeddings = compute_weighted_mean(embeddings, probs)        
         diffs_weighted = embeddings - weighted_mean_embeddings.unsqueeze(0)
         weighted_rds_scores = torch.norm(diffs_weighted, p=1, dim=1)
-        weighted_rds = (torch.tensor(probs, dtype=torch.float32, device=device) * weighted_rds_scores).sum().item()
+        weighted_rds = (probs * weighted_rds_scores).sum().item()
         
         # --- EigenEmbed ---
         eigen_embed = compute_eigen_embed(embeddings, alpha=1e-3)
@@ -96,15 +94,38 @@ def main(args, semantic_model, semantic_tokenizer):
         
         ### Semantic Baselines
         if args.semantic_baselines:
-            sem_entropy, dse = compute_semantic_entropy(gen, semantic_model, semantic_tokenizer)
+            # Semantic Entropy
+            sem_entropy, dse, semantic_sets = compute_semantic_entropy(gen, semantic_model, semantic_tokenizer)
             norm_dict["SE"].append(sem_entropy)
             norm_dict["DSE"].append(dse)
+            norm_dict["NumSet"].append(semantic_sets)
 
-            deg_val, sd_val = compute_deg_semantic_density(gen, semantic_model, semantic_tokenizer)
-            norm_dict["Deg"].append(deg_val)
+            # Semantic Density
+            _, sd_val = compute_deg_semantic_density(gen, semantic_model, semantic_tokenizer)
             norm_dict["SD"].append(sd_val)
             
-            # TODO: Add more semantic baselines here: Semantic Volumn (AAAI 26), KLE, RDS using hidden states (in EigenScore code), P(True)
+            # LexicalSim / Deg / Ecc / EigenLap / KLE
+            graph_baselines = compute_graph_baselines(cleaned_texts, semantic_model=semantic_model, semantic_tokenizer=semantic_tokenizer, device=device)
+            for method, score in graph_baselines.items():
+                norm_dict[method].append(score)
+                
+            semantic_volume = semantic_volume(embeddings)
+            norm_dict["SemanticVolume"].append(semantic_volume)
+            
+        if args.p_true:
+            tokenizer, model = load_huggingface_model(model_name=args.model)
+            
+            p_true = calculate_p_true(
+                model=model,
+                tokenizer=tokenizer,
+                question=gen["question"],
+                most_probable_answer=gen["greedy_text"],
+                brainstormed_answers=cleaned_texts,
+                device=device
+                )
+            norm_dict["P(True)"].append(p_true)
+        # TODO: Add more semantic baselines here: RDS using hidden states (in EigenScore code)
+            
             
         ### Self-Consistency
         freq = Counter(cleaned_texts)
@@ -188,7 +209,8 @@ if __name__ == "__main__":
     parser.add_argument('--embed_model', type=str, default='all-MiniLM-L6-v2')
     parser.add_argument('--dataset', type=str, required=True)
     parser.add_argument('--n_samples', type=int, default=10)
-    parser.add_argument('--semantic_baselines', type=bool, default=True, help='Whether to compute semantic baselines (SE, Deg, SD)')
+    parser.add_argument('--semantic_baselines', action='store_true', help='Whether to compute semantic baselines (SE, Deg, SD)')
+    parser.add_argument('--p_true', action='store_true', help='Whether to compute P(True) for each sample')
     parser.add_argument('--threshold', type=float, default=0.3, help='Threshold for binary classification of correctness (used for non-math datasets)')
     parser.add_argument('--fraction_of_data_to_use', type=float, default=1.0, help='Fraction of data to use for evaluation (for quick testing)')
     parser.add_argument('--eval_method', type=str, default='rougeL', help='Evaluation method for non-math datasets (e.g., rougeL or api)')
