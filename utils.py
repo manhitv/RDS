@@ -647,8 +647,8 @@ def compute_semantic_entropy(sample, embed_model, embed_tokenizer, device='cuda:
     aggregated_log_probs = torch.stack(aggregated_log_probs)
 
     probs = torch.softmax(aggregated_log_probs, dim=0)  # Normalize to probabilities
-    # dse_probs = torch.tensor(dse_log_probs, dtype=torch.float32, device=avg_nll.device)
-    dse_log_probs = torch.stack(dse_log_probs)
+    
+    dse_log_probs = torch.tensor(dse_log_probs, dtype=torch.float32, device=aggregated_log_probs.device)
     dse_probs = torch.softmax(dse_log_probs, dim=0)  # Normalize DSE weights to probabilities
     
     # Compute entropy: -sum(p * log(p))

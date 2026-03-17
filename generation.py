@@ -191,10 +191,10 @@ def generate_sequences(llm, dataset, rouge, args):
     for i, batch in enumerate(tqdm.tqdm(dataset)):
         prompt = batch['prompt']
         question = batch['question']
-        answer = batch['answer']
+        answer = batch['answer'].strip()
 
         # === GREEDY DECODING ===
-        greedy_out = llm.generate(prompt, sampling_params=greedy_params)[0].outputs[0]
+        greedy_out = llm.generate(prompt, sampling_params=greedy_params, use_tqdm=False)[0].outputs[0]
         if args.dataset == 'gsm8k':
             greedy_text = greedy_out.text.strip()
         else:
@@ -213,7 +213,7 @@ def generate_sequences(llm, dataset, rouge, args):
             llm_label = compute_label(greedy_text, answer, question=question, eval_method='llm_eval', api_type=args.api_type)
 
         # === MULTINOMIAL DECODING ===
-        sampled_outputs = llm.generate(prompt, sampling_params=multinomial_params)[0].outputs
+        sampled_outputs = llm.generate(prompt, sampling_params=multinomial_params, use_tqdm=False)[0].outputs
         generated_texts = [o.text for o in sampled_outputs]
         generation_logprobs = [o.logprobs for o in sampled_outputs]
 

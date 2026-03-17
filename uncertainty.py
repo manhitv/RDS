@@ -24,6 +24,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from utils import (
     calculate_p_true,
+    semantic_volume,
     compute_graph_baselines,
     load_huggingface_model,
     set_seed,
@@ -48,96 +49,107 @@ def main(args, semantic_model, semantic_tokenizer):
 
     labels = []
     norm_dict = defaultdict(list)
+    
+    if args.p_true:
+        tokenizer, model = load_huggingface_model(model_name=args.model)
 
     for i, gen in enumerate(tqdm(generations, desc="Processing generations")):
-        # --- Label ---
-        if args.dataset in ['gsm8k', 'svamp', 'arith']:
-            label = 1 - int(gen['eval_score'] == 1.0)
-        else:
-            label = 1 - int(gen['eval_score'] > args.threshold)
-        labels.append(label)
+        
+        with torch.no_grad():
+            # --- Label ---
+            if args.dataset in ['gsm8k', 'svamp', 'arith']:
+                label = 1 - int(gen['eval_score'] == 1.0)
+            else:
+                if args.eval_method == 'llm':
+                    label = 1 - int(gen['llm_label'] == 1.0)
+                elif args.eval_method == 'rougeL':
+                    label = 1 - int(gen['eval_score'] > args.threshold)
+                else:
+                    raise ValueError(f"Unsupported eval method: {args.eval_method}")
+            labels.append(label)
 
-        cleaned_texts = gen["cleaned_generated_texts"]
-        samples_avg_nll = gen["samples_avg_nll"]
+            cleaned_texts = gen["cleaned_generated_texts"]
+            samples_avg_nll = gen["samples_avg_nll"]
 
-        # --- Embeddings ---
-        embeddings = embed_model.encode(cleaned_texts, convert_to_tensor=True, device=device)
-        embeddings = F.normalize(embeddings, p=2, dim=1)
-        
-        # --- RDS base version ---
-        mean_embedding = torch.mean(embeddings, dim=0)
-        diffs = embeddings - mean_embedding 
-        rds_scores = torch.norm(diffs, p=1, dim=1)
-        rds = rds_scores.sum().item()
-        rds_l2 = torch.norm(diffs, p=2, dim=1).sum().item()
-        
-        # --- RDS weighted version ---
-        probs = np.exp(-np.array(samples_avg_nll))
-        probs /= probs.sum()
-        probs = torch.tensor(probs, dtype=torch.float32, device=device)
-        weighted_mean_embeddings = compute_weighted_mean(embeddings, probs)        
-        diffs_weighted = embeddings - weighted_mean_embeddings.unsqueeze(0)
-        weighted_rds_scores = torch.norm(diffs_weighted, p=1, dim=1)
-        weighted_rds = (probs * weighted_rds_scores).sum().item()
-        
-        # --- EigenEmbed ---
-        eigen_embed = compute_eigen_embed(embeddings, alpha=1e-3)
-        
-        # --- Store norms ---
-        norm_dict["EigenEmbed"].append(eigen_embed)
-        norm_dict["RDS Score (base)"].append(rds)
-        norm_dict["RDS L2 (base)"].append(rds_l2)
-        norm_dict["RDS Score (weighted)"].append(weighted_rds)
-        
-        ### PRO
-        norm_dict["PRO"].append(pro_score(gen))
-        
-        ### Semantic Baselines
-        if args.semantic_baselines:
-            # Semantic Entropy
-            sem_entropy, dse, semantic_sets = compute_semantic_entropy(gen, semantic_model, semantic_tokenizer)
-            norm_dict["SE"].append(sem_entropy)
-            norm_dict["DSE"].append(dse)
-            norm_dict["NumSet"].append(semantic_sets)
-
-            # Semantic Density
-            _, sd_val = compute_deg_semantic_density(gen, semantic_model, semantic_tokenizer)
-            norm_dict["SD"].append(sd_val)
+            # --- Embeddings ---
+            embeddings = embed_model.encode(cleaned_texts, convert_to_tensor=True, device=device)
+            embeddings = F.normalize(embeddings, p=2, dim=1)
             
-            # LexicalSim / Deg / Ecc / EigenLap / KLE
-            graph_baselines = compute_graph_baselines(cleaned_texts, semantic_model=semantic_model, semantic_tokenizer=semantic_tokenizer, device=device)
-            for method, score in graph_baselines.items():
-                norm_dict[method].append(score)
+            # --- RDS base version ---
+            mean_embedding = torch.mean(embeddings, dim=0)
+            diffs = embeddings - mean_embedding 
+            rds_scores = torch.norm(diffs, p=1, dim=1)
+            rds = rds_scores.sum().item()
+            rds_l2 = torch.norm(diffs, p=2, dim=1).sum().item()
+            
+            # --- RDS weighted version ---
+            probs = np.exp(-np.array(samples_avg_nll))
+            probs /= probs.sum()
+            probs = torch.tensor(probs, dtype=torch.float32, device=device)
+            weighted_mean_embeddings = compute_weighted_mean(embeddings, probs)        
+            diffs_weighted = embeddings - weighted_mean_embeddings.unsqueeze(0)
+            weighted_rds_scores = torch.norm(diffs_weighted, p=1, dim=1)
+            weighted_rds = (probs * weighted_rds_scores).sum().item()
+            
+            # --- EigenEmbed ---
+            eigen_embed = compute_eigen_embed(embeddings, alpha=1e-3)
+            
+            # --- Store norms ---
+            norm_dict["EigenEmbed"].append(eigen_embed)
+            norm_dict["RDS Score (base)"].append(rds)
+            norm_dict["RDS L2 (base)"].append(rds_l2)
+            norm_dict["RDS Score (weighted)"].append(weighted_rds)
+            
+            ### PRO
+            norm_dict["PRO"].append(pro_score(gen))
+            
+            ### Semantic Baselines
+            if args.semantic_baselines:
+                # Semantic Entropy
+                sem_entropy, dse, semantic_sets = compute_semantic_entropy(gen, semantic_model, semantic_tokenizer)
+                norm_dict["SE"].append(sem_entropy)
+                norm_dict["DSE"].append(dse)
+                norm_dict["NumSet"].append(semantic_sets)
+
+                # Semantic Density
+                deg_old, sd_val = compute_deg_semantic_density(gen, semantic_model, semantic_tokenizer)
+                norm_dict["SD"].append(sd_val)
+                norm_dict["Deg_Old"].append(deg_old)
                 
-            semantic_volume = semantic_volume(embeddings)
-            norm_dict["SemanticVolume"].append(semantic_volume)
-            
-        if args.p_true:
-            tokenizer, model = load_huggingface_model(model_name=args.model)
-            
-            p_true = calculate_p_true(
-                model=model,
-                tokenizer=tokenizer,
-                question=gen["question"],
-                most_probable_answer=gen["greedy_text"],
-                brainstormed_answers=cleaned_texts,
-                device=device
-                )
-            norm_dict["P(True)"].append(p_true)
-        # TODO: Add more semantic baselines here: RDS using hidden states (in EigenScore code)
-            
-            
-        ### Self-Consistency
-        freq = Counter(cleaned_texts)
-        major_sample_count = freq.most_common(1)[0][1]
-        major_score = major_sample_count / len(cleaned_texts)
-        norm_dict['SC'].append(1 - major_score)
+                # LexicalSim / Deg / Ecc / EigenLap / KLE
+                graph_baselines = compute_graph_baselines(cleaned_texts, semantic_model=semantic_model, semantic_tokenizer=semantic_tokenizer, device=device)
+                for method, score in graph_baselines.items():
+                    norm_dict[method].append(score)
+                    
+                sv = semantic_volume(embeddings)
+                norm_dict["SemanticVolume"].append(sv)
+                
+            if args.p_true:           
+                p_true = calculate_p_true(
+                    model=model,
+                    tokenizer=tokenizer,
+                    question=gen["question"],
+                    most_probable_answer=gen["greedy_text"],
+                    brainstormed_answers=cleaned_texts,
+                    device=device
+                    )
+                norm_dict["P(True)"].append(p_true)       
+                
+            ### Self-Consistency
+            freq = Counter(cleaned_texts)
+            major_sample_count = freq.most_common(1)[0][1]
+            major_score = major_sample_count / len(cleaned_texts)
+            norm_dict['SC'].append(1 - major_score)
 
     # --- AUROC reporting ---
     results = {}
     correlation_results = {}
 
     for method, values in norm_dict.items():
+        values = [
+            v.detach().cpu().item() if torch.is_tensor(v) else v
+            for v in values
+        ]
         values = np.array(values)
 
         auc = roc_auc_score(labels, values)
@@ -151,6 +163,10 @@ def main(args, semantic_model, semantic_tokenizer):
         
     ece_results = {}
     for method, values in norm_dict.items():
+        values = [
+            v.detach().cpu().item() if torch.is_tensor(v) else v
+            for v in values
+        ]
         values = np.array(values)
 
         # uncertainty → confidence
@@ -226,6 +242,7 @@ if __name__ == "__main__":
     # --- Load semantic model and tokenizer ---
     semantic_tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-large-mnli")
     semantic_model = AutoModelForSequenceClassification.from_pretrained("microsoft/deberta-large-mnli").to('cuda')
+    semantic_model.eval()
     
     print(f"UNCERTAINTY: Dataset={args.dataset}, Model={args.model}, EB={args.embed_model}, N={args.n_samples}, F={args.fraction_of_data_to_use}, T={args.threshold}, S={args.seed}, E={args.eval_method}, A={args.api_type}.")
     start_time = datetime.now()
