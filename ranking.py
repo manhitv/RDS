@@ -13,6 +13,10 @@ import argparse
 import numpy as np
 from collections import Counter
 import pandas as pd
+
+import logging
+logging.basicConfig(level=logging.ERROR)
+
 from sentence_transformers import SentenceTransformer
 from utils import (
     MODEL_PATH_DICT,
@@ -23,22 +27,26 @@ from utils import (
     clean_generation, 
     clean_answer, 
     is_correct,
-    compute_label
+    compute_label,
+    extract_math_response
     )
 
 
 def evaluation_sample(dataset, text, answer, rouge, question=None, eval_method="rougeL", api_type="cohere", threshold=0.3):
     
-    if dataset == 'gsm8k':
-        text = text.strip()
-    else:
-        text = clean_generation(text)
+    # if dataset in ['gsm8k']:
+    #     text = extract_math_response(text=text, args=args)
+    # else:
+    #     text = clean_generation(text)
         
     if dataset in ['svamp', 'arith']: # exact match for math datasets
         eval_score = compute_label(generation=text, ground_truth=answer, eval_method="exact_match")
-    elif dataset == 'gsm8k':
-        model_answer = clean_answer(text)
-        eval_score = is_correct(model_answer=model_answer, answer=answer)
+    elif dataset in ['gsm8k']:
+        eval_score = int(text == np.round(answer, 1))
+        # model_answer = clean_answer(text)
+        # eval_score = is_correct(model_answer=model_answer, answer=answer)
+    elif dataset in ['formal_logic']:
+        eval_score = int(text == answer)
     else:
         eval_score = compute_label(generation=text, ground_truth=answer, question=question, eval_method=eval_method, rouge=rouge, api_type=api_type)
     
@@ -73,6 +81,7 @@ def main(args):
         
         # --- Find the least uncertain samples ---
         cleaned_texts = gen["cleaned_generated_texts"]
+        extracted_answers = gen["extracted_answers"] if "extracted_answers" in gen else [None] * len(cleaned_texts)
         samples_avg_nll = gen["samples_avg_nll"]
         samples_nll = gen["samples_nll"]
         
@@ -92,13 +101,23 @@ def main(args):
         weighted_rds_scores = torch.norm(diffs_weighted, p=1, dim=1)
         
         # --- Ranking and find samples ---
-        nll_sample = cleaned_texts[np.argmin(samples_nll)]
-        avg_nll_sample = cleaned_texts[np.argmin(samples_avg_nll)]
-        rds_sample = cleaned_texts[torch.argmin(rds_scores).item()]
-        weighted_rds_sample = cleaned_texts[torch.argmin(weighted_rds_scores).item()]
+        if args.dataset in ['gsm8k', 'formal_logic']:
+        
+            nll_sample = extracted_answers[np.argmin(samples_nll)]
+            avg_nll_sample = extracted_answers[np.argmin(samples_avg_nll)]
+            rds_sample = extracted_answers[torch.argmin(rds_scores).item()]
+            weighted_rds_sample = extracted_answers[torch.argmin(weighted_rds_scores).item()]
+            
+            freq = Counter(extracted_answers)
+            majority_sample = freq.most_common(1)[0][0]
+        else:
+            nll_sample = cleaned_texts[np.argmin(samples_nll)]
+            avg_nll_sample = cleaned_texts[np.argmin(samples_avg_nll)]
+            rds_sample = cleaned_texts[torch.argmin(rds_scores).item()]
+            weighted_rds_sample = cleaned_texts[torch.argmin(weighted_rds_scores).item()]
 
-        freq = Counter(cleaned_texts)
-        majority_sample = freq.most_common(1)[0][0]
+            freq = Counter(cleaned_texts)
+            majority_sample = freq.most_common(1)[0][0]
         
         if args.self_certainty:
             sc_cache_path = f"{config.output_dir}/{args.dataset}_{args.model}_N={args.n_samples}_F={args.fraction_of_data_to_use}_A={args.api_type}_S={args.seed}__self_certainty.pkl"
@@ -131,7 +150,10 @@ def main(args):
         # --- Self-certainty sample ---
         if "samples_ce" in gen:
             sc_scores = np.array(gen["samples_ce"])
-            self_certainty_sample = get_self_certainty_sample(sc_scores, cleaned_texts)
+            if args.dataset in ['gsm8k', 'formal_logic']:
+                self_certainty_sample = get_self_certainty_sample(sc_scores, extracted_answers)
+            else:
+                self_certainty_sample = get_self_certainty_sample(sc_scores, cleaned_texts)
         else:
             self_certainty_sample = None
 
@@ -140,6 +162,7 @@ def main(args):
                   ['nll', 'avg_nll', 'rds', 'weighted_rds', 'majority', 'self_certainty']
         samples = [nll_sample, avg_nll_sample, rds_sample, weighted_rds_sample, majority_sample] if self_certainty_sample is None else \
                   [nll_sample, avg_nll_sample, rds_sample, weighted_rds_sample, majority_sample, self_certainty_sample]
+
         for method, sample in zip(methods, samples):
             acc = evaluation_sample(
                 dataset=args.dataset,
@@ -149,7 +172,7 @@ def main(args):
                 rouge=rouge,
                 api_type=args.api_type,
                 eval_method=args.eval_method,
-                threshold=args.threshold                
+                threshold=args.threshold
             )
             
             if method not in accuracy:
@@ -159,14 +182,14 @@ def main(args):
             
             # For debug
             if i < 3:
-                print(f"Sample {i} | Method: {method} | Acc: {acc} | Sample: {sample[:50]}...")
+                print(f"Sample {i} | Method: {method} | Acc: {acc} | Sample: {sample}...")
     
     # --- Reporting ---
     results = {}
     print("\n=== Metric Performance ===")
     for method, values in accuracy.items():
         final_acc = np.mean(values)
-        results[method] = final_acc
+        results[method] = round(final_acc, 4)
         print(f"{method:55s} → ACC: {final_acc:.4f}")
 
     # --- Prepare row to append ---

@@ -8,6 +8,9 @@ import tqdm
 import evaluate
 import config
 import json
+import re
+import logging
+logging.basicConfig(level=logging.ERROR)
 
 from datasets import load_dataset
 from vllm import LLM, SamplingParams
@@ -19,7 +22,10 @@ from utils import (
     set_seed, 
     clean_generation, 
     flatten_logprobs,
-    compute_label
+    compute_label,
+    get_instruction_suffix,
+    extract_math_answer,
+    extract_math_response
     )
 
 # --------------------------------
@@ -42,7 +48,7 @@ def parse_dataset(args):
             if len(lines) < 2:
                 continue
             question = lines[0].strip()
-            ans = [a.strip() for a in lines[1].split(";") if a.strip()]
+            ans = [a.strip() for a in lines[1].split(";") if a.strip()][0]
             questions.append(question)
             answers.append(ans)
 
@@ -115,22 +121,37 @@ def parse_dataset(args):
         ds = load_dataset("gsm8k", "main")['test']
         questions = [item['question'] for item in ds]
         answers = [item['answer'] for item in ds]
+        
+    elif args.dataset == 'formal_logic':
+        ds = load_dataset('cais/mmlu', 'formal_logic')['test']
+        questions = []
+        answers = []
+        choices = "ABCD"
+        for query, options, answer in zip(ds['question'], ds['choices'], ds['answer']):
+            if len(options) != 4 :
+                continue
+            question = '{}\n(A) {}\n(B) {}\n(C) {}\n(D) {}\n\n'.format(query, options[0], options[1], options[2], options[3])
+            label = f"({choices[int(answer)]})"
+            questions.append(question)
+            answers.append(label)
     else:
         raise ValueError(f"Dataset {args.dataset} not supported for parsing.")
 
     # Build few-shot prompt
     n_few = min(args.few_shot_num, len(questions))
-    if args.dataset == 'gsm8k':
-        few_shot_prompt = create_demo_text()
+    if args.dataset in ['gsm8k', 'formal_logic']:
+        few_shot_prompt = get_instruction_suffix(args=args) # create_demo_text()
+        
     elif args.dataset == 'coqa':
         few_shot_prompt = f"This is a bot that correctly answers questions based on the provided context.\n\n{stories[0]}\n\n"
+        
     elif args.dataset in ['trivia_qa', 'truthful_qa']:
         pass  # already constructed above
     else:
         few_shot_prompt = "This is a bot that correctly answers questions.\n"
         for i in range(n_few):
             if args.dataset in ['sciq', 'nq']:
-                few_shot_prompt += f"Question: {questions[i]}\nAnswer: {answers[i][0]}\n\n"
+                few_shot_prompt += f"Question: {questions[i]}\nAnswer: {answers[i]}\n\n"
             elif args.dataset == 'arith':
                 few_shot_prompt += f"{questions[i]}\n{answers[i]}\n\n" # Question and Answer is included in context
             else:
@@ -154,6 +175,14 @@ def parse_dataset(args):
                 "answer": answers[i],
                 "prompt": prompt
             })
+    elif args.dataset in ['gsm8k', 'formal_logic']: 
+        for i in range(len(questions)):
+            prompt = f"Question: {questions[i]}\n" + few_shot_prompt
+            processed_dataset.append({
+                "question": questions[i],
+                "answer": answers[i],
+                "prompt": prompt
+            })
     else:
         for i in range(n_few, len(questions)):
             prompt = few_shot_prompt + f"Question: {questions[i]}\nAnswer:"
@@ -164,6 +193,7 @@ def parse_dataset(args):
             })
 
     return processed_dataset
+
 
 # --------------------
 # GENERATION + NLL
@@ -195,19 +225,29 @@ def generate_sequences(llm, dataset, rouge, args):
 
         # === GREEDY DECODING ===
         greedy_out = llm.generate(prompt, sampling_params=greedy_params, use_tqdm=False)[0].outputs[0]
-        if args.dataset == 'gsm8k':
-            greedy_text = greedy_out.text.strip()
+        greedy_text = greedy_out.text.strip()
+        if args.dataset in ['gsm8k', 'formal_logic']:
+            
+            greedy_text = extract_math_response(text=greedy_text, args=args)
+            answer = extract_math_answer(answer)
         else:
-            greedy_text = clean_generation(greedy_out.text)
+            
+            greedy_text = clean_generation(greedy_text)
             
         greedy_logprobs = greedy_out.logprobs
 
         llm_label = None
         if args.dataset in ['svamp', 'arith']: # exact match for math datasets
             eval_score = compute_label(greedy_text, answer, eval_method='exact_match')
+        
         elif args.dataset == 'gsm8k':
-            model_answer = clean_answer(greedy_text)
-            eval_score = is_correct(model_answer=model_answer, answer=answer)
+            # model_answer = clean_answer(greedy_text)
+            # eval_score = is_correct(model_answer=model_answer, answer=answer)
+            eval_score = int(greedy_text == np.round(answer, 1))
+        
+        elif args.dataset in ['formal_logic']:
+            eval_score = int(greedy_text == answer)
+            
         else:
             eval_score = compute_label(greedy_text, answer, rouge=rouge, eval_method='rougeL')
             llm_label = compute_label(greedy_text, answer, question=question, eval_method='llm_eval', api_type=args.api_type)
@@ -219,6 +259,11 @@ def generate_sequences(llm, dataset, rouge, args):
 
         # === CLEANING ===
         cleaned = [clean_generation(g) for g in generated_texts]
+        
+        if args.dataset in ['gsm8k', 'formal_logic']:
+            extracted_answers = [extract_math_response(text=g, args=args) for g in generated_texts]
+        else:
+            extracted_answers = cleaned
 
         # === UNCERTAINTY (negative log-likelihood) ===
         samples_avg_nll, samples_nll = [], []
@@ -241,6 +286,8 @@ def generate_sequences(llm, dataset, rouge, args):
             print('Answer:', answer)
             print('Greedy text:', greedy_text)
             print('Greedy logprobs:', greedy_logprobs)
+            print('Extracted greedy answer:', greedy_text)
+            print('Extracted answers:', extracted_answers)
             print('Samples avg NLL:', samples_avg_nll)
             print('Samples NLL:', samples_nll)
             print('Eval score:', eval_score)
@@ -254,13 +301,15 @@ def generate_sequences(llm, dataset, rouge, args):
             'answer': answer,
             'generated_texts': generated_texts,
             'cleaned_generated_texts': cleaned,
+            'extracted_answers': extracted_answers,
             'samples_nll': samples_nll,
             'samples_avg_nll': samples_avg_nll,
             'greedy_text': greedy_text,
             'greedy_nll': greedy_nll,
             'greedy_avg_nll': greedy_avg_nll,
             'eval_score': eval_score,
-            "llm_label": llm_label
+            "llm_label": llm_label,
+            "max_new_tokens": args.max_new_tokens
         })
         
     return sequences
@@ -307,7 +356,7 @@ if __name__ == '__main__':
     parser.add_argument('--few_shot_num', type=int, default=5)
     parser.add_argument('--model', type=str, default='gemma-7b', required=True)
     parser.add_argument('--dataset', type=str, default='coqa', required=True)
-    parser.add_argument('--max_new_tokens', type=int, default=32)
+    parser.add_argument('--max_new_tokens', type=int, default=32) # 512 for gsm8k
     parser.add_argument('--seed', type=int, default=10, help='Random seed for reproducibility')
     parser.add_argument('--api_type', type=str, default='cohere', choices=['gemini', 'cohere'], help='API type for LLM evaluation')
     

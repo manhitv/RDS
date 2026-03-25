@@ -16,6 +16,9 @@ from collections import Counter
 import numpy as np
 from datetime import datetime
 
+import logging
+logging.basicConfig(level=logging.ERROR)
+
 import os
 import pandas as pd
 
@@ -57,7 +60,7 @@ def main(args, semantic_model, semantic_tokenizer):
         
         with torch.no_grad():
             # --- Label ---
-            if args.dataset in ['gsm8k', 'svamp', 'arith']:
+            if args.dataset in ['gsm8k', 'svamp', 'arith', 'formal_logic']:
                 label = 1 - int(gen['eval_score'] == 1.0)
             else:
                 if args.eval_method == 'llm':
@@ -68,6 +71,7 @@ def main(args, semantic_model, semantic_tokenizer):
                     raise ValueError(f"Unsupported eval method: {args.eval_method}")
             labels.append(label)
 
+            extracted_answers = gen.get("extracted_answers", [])
             cleaned_texts = gen["cleaned_generated_texts"]
             samples_avg_nll = gen["samples_avg_nll"]
 
@@ -129,14 +133,17 @@ def main(args, semantic_model, semantic_tokenizer):
                     model=model,
                     tokenizer=tokenizer,
                     question=gen["question"],
-                    most_probable_answer=gen["greedy_text"],
+                    most_probable_answer=str(gen["greedy_text"]),
                     brainstormed_answers=cleaned_texts,
                     device=device
                     )
                 norm_dict["P(True)"].append(p_true)       
                 
             ### Self-Consistency
-            freq = Counter(cleaned_texts)
+            if args.dataset in ['gsm8k', 'formal_logic']:
+                freq = Counter(extracted_answers)
+            else:
+                freq = Counter(cleaned_texts)
             major_sample_count = freq.most_common(1)[0][1]
             major_score = major_sample_count / len(cleaned_texts)
             norm_dict['SC'].append(1 - major_score)

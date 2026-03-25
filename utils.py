@@ -104,6 +104,29 @@ def flatten_logprobs(logprobs):
     return flat
 
 
+def extract_math_response(text, args):
+    try:
+        pred = re.findall(r"\{(.*?)\}", text)[-1]
+        pred = float(pred.replace("final answer:", "").strip())
+        
+        if args.dataset == 'gsm8k':
+            text = round(pred, 1)
+        
+        elif args.dataset == 'formal_logic':
+            if len(pred) == 0:
+                text = ""
+            elif len(pred) < 3:
+                pred = pred[0]
+                text = f"({pred})"
+            else:
+                pred = pred[1]
+                text = f"({pred})"
+
+    except :
+        text =  ""
+        
+    return text
+
 def clean_generation(text):
     for s in ['Q:', 'A:', 'question:', 'answer:', 'Question:', 'Answer:', 'Questions:', 'questions:', 'QUESTION:', 'ANSWER:', ':']:
         if s in text:
@@ -448,6 +471,26 @@ def is_correct(model_answer, answer):
     assert gt_answer != INVALID_ANS
     return model_answer == gt_answer
 
+def extract_math_answer(full_ans_text: str) -> str:
+    match = ANS_RE.search(full_ans_text)
+    if match:
+        match_str = match.group(1).strip()
+        match_str = match_str.replace(",", "")
+        return int(match_str.strip())
+    return None
+
+def get_instruction_suffix(args):
+    if args.dataset in ['arithmetics']:
+        return " Make sure to state your final answer in curly brackets at the very end of your response, just like: '{final answer: 12.34}'. Let's think step by step."
+    elif args.dataset in ['gsm8k']:
+        return " Make sure to state your final answer in curly brackets at the very end of your response, just like: '{final answer: 123}'. Let's think step by step."
+        
+    elif args.dataset in ['hellaswag','pro_medicine','formal_logic','csqa','hh_rlhf']:
+        return " Make sure to state your final answer choice in curly brackets at the very end of your response, just like: '{final answer: (A)}'. Let's think step by step."
+    
+    elif args.dataset in ['cnn_daily']:
+        return ' Make sure to provide your summary after stating "# Summary # ".'
+
 
 def create_demo_text(n_shot=8, cot_flag=True):
     question, chain, answer = [], [], []
@@ -675,7 +718,7 @@ def compute_deg_semantic_density(sample, embed_model, embed_tokenizer, device='c
     """
     question = sample['question']
     cleaned_generated_texts = sample['cleaned_generated_texts']
-    most_likely_text = sample['greedy_text']
+    most_likely_text = str(sample['greedy_text'])
     contradict_prob_list = []
 
     likelihood_sum = 0.0
