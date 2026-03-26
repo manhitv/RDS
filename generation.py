@@ -4,6 +4,7 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 import argparse
 import pickle
 import numpy as np
+import pandas as pd
 import tqdm
 import evaluate
 import config
@@ -124,6 +125,8 @@ def parse_dataset(args):
         
     elif args.dataset == 'formal_logic':
         ds = load_dataset('cais/mmlu', 'formal_logic')['test']
+        ds = pd.DataFrame(ds)
+        
         questions = []
         answers = []
         choices = "ABCD"
@@ -229,7 +232,9 @@ def generate_sequences(llm, dataset, rouge, args):
         if args.dataset in ['gsm8k', 'formal_logic']:
             
             greedy_text = extract_math_response(text=greedy_text, args=args)
-            answer = extract_math_answer(answer)
+            if args.dataset == 'gsm8k':
+                answer = extract_math_answer(answer)
+
         else:
             
             greedy_text = clean_generation(greedy_text)
